@@ -1,0 +1,105 @@
+# ============================================================
+# Smart Exam Hall Monitoring System — Configuration File
+# Chapter 3 Reference: Section 3.16
+# ALL thresholds and settings live here — never hardcode in modules
+# ============================================================
+
+# --- Camera Settings ---
+camera:
+  device_index: 0          # 0 = first USB camera. Change to 1, 2 etc for other cameras
+  width: 640
+  height: 480
+  fps: 30
+  input_type: "live"       # "live" for webcam, "video" for test file
+  test_video_path: "test_videos/test.mp4"  # used only when input_type = "video"
+
+# --- Frame Queue Settings (Section 3.13) ---
+# Each module has its own queue — separate, not shared
+queues:
+  max_size: 30             # Max frames in each module queue before dropping oldest
+  # If queue hits max_size, oldest frame is dropped to keep system real-time
+
+# --- Phone Detection Module (Section 3.7) ---
+phone_detection:
+  model_path: "models/phone_detector_best.pt"
+  confidence_threshold: 0.55     # Min confidence to consider a detection
+  inference_image_size: 640
+  base_score: 35                 # Chapter 3 Table 3.5 — unambiguous violation
+
+  # Confidence weighting (Chapter 3 Table 3.7)
+  confidence_weights:
+    tier_1_threshold: 0.90       # >= 0.90 → 100% of base score
+    tier_2_threshold: 0.75       # >= 0.75 → 80% of base score
+    tier_3_threshold: 0.60       # >= 0.60 → 60% of base score
+    # Below confidence_threshold (0.55) → ignored entirely
+
+  # Phone detection = immediate alert, NO persistence counter (Section 3.7.3)
+  requires_persistence: false
+
+# --- Gaze / Head Detection Module (Section 3.6) ---
+gaze_detection:
+  # Head orientation thresholds (Chapter 3 Table 3.3)
+  yaw_threshold: 30.0            # degrees left/right before flagging
+  pitch_down_threshold: -20.0    # degrees down (reading hidden notes)
+  pitch_up_threshold: 15.0       # degrees up (signalling)
+  persistence_seconds: 3.0       # sustained seconds before raising event
+  base_score_sustained: 15       # Chapter 3 Table 3.5
+  base_score_brief: 8
+
+# --- Posture Analysis Module (Section 3.9) ---
+posture_analysis:
+  calibration_window_seconds: 60  # First 60s = baseline recording
+  deviation_std_multiplier: 2.0   # Flag if > 2 std devs from personal baseline
+  persistence_seconds: 3.0
+  base_score_sustained: 10        # Chapter 3 Table 3.5
+  base_score_brief: 5
+
+# --- Object Passing Module (Section 3.8) ---
+object_passing:
+  zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
+  transfer_time_window_seconds: 1.5
+  min_zone_separation: 0.15       # Min fraction of frame width between zones
+  base_score: 30                  # Chapter 3 Table 3.5
+
+# --- Scoring & Alert System (Section 3.10) ---
+scoring:
+  # Duration multipliers (Chapter 3 Table 3.6)
+  duration_multipliers:
+    under_3s: 1.0
+    from_3_to_6s: 1.5
+    from_6_to_10s: 2.0
+    over_10s: 3.0
+
+  # Combination bonus (Section 3.10.4)
+  combination_bonus: 1.20         # 20% bonus if 2+ modules flag same candidate
+  combination_window_seconds: 30  # Window to check for corroborating signals
+
+  # Score window (Section 3.10.4)
+  score_window_seconds: 120       # Events older than 120s no longer contribute
+
+  # Score decay (Section 3.10.5)
+  decay_percent_per_10s: 10       # -10% every 10s of clean behaviour
+
+  # Alert thresholds (Chapter 3 Table 3.8)
+  yellow_threshold: 60
+  red_threshold: 75
+
+# --- Alert Cooldowns (Section 3.11) ---
+alerts:
+  red_cooldown_seconds: 30        # No repeat red alert for same candidate for 30s
+  yellow_cooldown_seconds: 15
+
+# --- Database (Section 3.11) ---
+database:
+  path: "database/incidents.db"
+
+# --- Dashboard (Section 3.12) ---
+dashboard:
+  host: "0.0.0.0"
+  port: 5000
+  audio_alert: true
+
+# --- Preprocessing (Section 3.5) ---
+preprocessing:
+  gaussian_blur_kernel: 3         # Must be odd number
+  brightness_threshold: 80        # If avg pixel < this, boost brightness
