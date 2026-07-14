@@ -253,51 +253,23 @@ class HeadPoseEstimator:
         # Convert rotation vector to rotation matrix (Rodrigues transformation)
         rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
 
-        # Decompose rotation matrix into Euler angles.
+        # Decompose rotation matrix into Euler angles
+        # Using RQDecomp3x3 for stable decomposition.
         #
-        # NOTE: We deliberately do NOT use cv2.RQDecomp3x3 here. It has a
-        # known ambiguity at steep angles — during testing, a sustained
-        # downward head tilt (real pitch around -40°) was instead reported
-        # as pitch ≈ +47° with roll snapping to ≈176° (i.e. flipping to an
-        # equivalent-but-differently-signed decomposition branch). That
-        # caused genuine "down" deviations to be misread as "up" and
-        # bypass the personalised down-calibration entirely.
-        #
-        # This atan2-based extraction stays continuous and correctly
-        # signed across the full pitch range, including steep down tilts.
-        yaw, pitch, roll = self._rotation_matrix_to_euler(rotation_matrix)
+        # NOTE: an earlier attempt to replace this with a custom atan2-based
+        # extraction (to fix a narrow gimbal-lock bug at steep pitch angles)
+        # turned out to be a regression — it caused yaw to saturate near
+        # ±180° for almost any turn, and pitch stopped responding to real
+        # up/down tilts at all. Reverted back to RQDecomp3x3, which behaves
+        # correctly for normal/moderate angles. The steep-angle edge case
+        # (roll snapping to ~176° while pitch flips sign) still needs a
+        # targeted fix, but we need clean baseline numbers from this
+        # version first rather than guessing again.
+        angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
 
-        return yaw, pitch, roll
-
-    @staticmethod
-    def _rotation_matrix_to_euler(R: np.ndarray) -> Tuple[float, float, float]:
-        """
-        Convert a rotation matrix to (yaw, pitch, roll) in degrees using
-        direct atan2 extraction. More robust than cv2.RQDecomp3x3 for
-        head-pose estimation since it doesn't jump between equivalent
-        Euler-angle branches at steep angles.
-        """
-        sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
-        singular = sy < 1e-6
-
-        if not singular:
-            pitch = np.degrees(np.arctan2(-R[2, 0], sy))
-            yaw   = np.degrees(np.arctan2(R[1, 0], R[0, 0]))
-            roll  = np.degrees(np.arctan2(R[2, 1], R[2, 2]))
-        else:
-            pitch = np.degrees(np.arctan2(-R[2, 0], sy))
-            yaw   = 0.0
-            roll  = np.degrees(np.arctan2(-R[1, 2], R[1, 1]))
-
-        # Sign correction: confirmed via live testing that the raw
-        # extraction above comes out inverted on both axes relative to
-        # this module's documented convention (yaw: negative=left,
-        # positive=right; pitch: negative=down, positive=up). Facing
-        # down was producing positive pitch, and left/right were
-        # swapped. Negating both here keeps the rest of the pipeline
-        # (thresholds, calibration baseline, alert_manager) unchanged.
-        yaw = -yaw
-        pitch = -pitch
+        yaw   = angles[1]   # Left-right rotation
+        pitch = angles[0]   # Up-down tilt
+        roll  = angles[2]   # Lateral tilt
 
         return float(yaw), float(pitch), float(roll)
 
