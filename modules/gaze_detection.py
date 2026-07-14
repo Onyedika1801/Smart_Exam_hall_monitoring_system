@@ -581,16 +581,20 @@ class GazeDetectionModule:
 
             calibrating = state.is_calibrating() if state else False
 
-            # Colour: blue = calibrating, green = normal,
-            # orange = deviating, red = alert triggered
-            if calibrating:
-                colour = (255, 165, 0)     # Blue — still learning baseline
-            elif deviation_type is None:
-                colour = (0, 255, 0)       # Green — normal
-            elif state and state.get_deviation_duration() >= self._persistence_secs:
-                colour = (0, 0, 255)       # Red — sustained deviation
+            # Colour priority: an ACTIVE deviation (lateral/up — these stay
+            # fully active during calibration) always takes precedence over
+            # the "calibrating" indicator. Blue only shows when calibrating
+            # AND currently normal (no lateral/up deviation right now).
+            # Green = normal, orange = brief deviation, red = sustained deviation.
+            if deviation_type is not None:
+                if state and state.get_deviation_duration() >= self._persistence_secs:
+                    colour = (0, 0, 255)       # Red — sustained deviation
+                else:
+                    colour = (0, 165, 255)     # Orange — brief deviation
+            elif calibrating:
+                colour = (255, 165, 0)         # Blue — calibrating, currently normal
             else:
-                colour = (0, 165, 255)     # Orange — brief deviation
+                colour = (0, 255, 0)           # Green — normal
 
             # Draw face bounding box
             cv2.rectangle(frame_out, (x1, y1), (x2, y2), colour, 2)

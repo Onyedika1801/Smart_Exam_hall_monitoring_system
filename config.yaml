@@ -52,7 +52,7 @@ gaze_detection:
   # testing showed normal exam-script writing was being flagged as
   # "reading hidden notes"). Same principle as posture_analysis's
   # personal baseline, applied to pitch only.
-  pitch_calibration_window_seconds: 180  # ~3 min — covers question-reading
+  pitch_calibration_window_seconds: 130  # ~2.2 min — covers question-reading
                                           # time before writing begins
   pitch_down_margin: 15.0        # degrees BELOW personal baseline before
                                   # a downward pitch counts as suspicious
