@@ -115,8 +115,10 @@ def run_isolation_test(source, config_path="config.yaml"):
                 except queue.Empty:
                     break
 
-            recent_events = recent_events[-30:]
-            display_frame = module.draw_detections(frame, recent_events)
+            # Only draw THIS frame's detections — drawing accumulated history
+            # causes stale boxes to stack up on screen (cosmetic bug only,
+            # never affected the real detection/scoring pipeline)
+            display_frame = module.draw_detections(frame, new_events)
 
             # Camera FPS
             camera_fps_times.append(time.time() - t_start)
