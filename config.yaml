@@ -40,11 +40,25 @@ phone_detection:
 gaze_detection:
   # Head orientation thresholds (Chapter 3 Table 3.3)
   yaw_threshold: 30.0            # degrees left/right before flagging
-  pitch_down_threshold: -20.0    # degrees down (reading hidden notes)
-  pitch_up_threshold: 15.0       # degrees up (signalling)
+  pitch_down_threshold: -20.0    # fallback only — used if calibration never
+                                  # completes for a candidate (e.g. left frame early)
+  pitch_up_threshold: 15.0       # degrees up (signalling) — always active,
+                                  # including during calibration
   persistence_seconds: 3.0       # sustained seconds before raising event
   base_score_sustained: 15       # Chapter 3 Table 3.5
   base_score_brief: 8
+
+  # Personalised downward-pitch calibration (added after false-positive
+  # testing showed normal exam-script writing was being flagged as
+  # "reading hidden notes"). Same principle as posture_analysis's
+  # personal baseline, applied to pitch only.
+  pitch_calibration_window_seconds: 180  # ~3 min — covers question-reading
+                                          # time before writing begins
+  pitch_down_margin: 15.0        # degrees BELOW personal baseline before
+                                  # a downward pitch counts as suspicious
+  # NOTE: during the calibration window, "down" deviations are NOT flagged
+  # at all — that's the whole point of calibrating a natural writing angle.
+  # Lateral (yaw) and "up" deviations ARE still flagged during calibration.
 
 # --- Posture Analysis Module (Section 3.9) ---
 posture_analysis:

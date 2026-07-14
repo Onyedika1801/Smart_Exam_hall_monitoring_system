@@ -20,9 +20,12 @@ Architecture note (Section 3.13):
   Camera thread → [gaze_frame_queue] → GazeDetectionModule → [alert_queue]
 
 Head orientation thresholds (Chapter 3 Table 3.3):
-  Yaw:   outside ±30°  → looking at neighbour
-  Pitch: below  -20°   → reading hidden notes
-  Pitch: above  +15°   → signalling / looking back
+  Yaw:   outside ±30°  → looking at neighbour (always active)
+  Pitch: below personal baseline - 15°  → reading hidden notes
+         (personal baseline calibrated over first 180s per candidate;
+          "down" is NOT flagged at all during calibration — normal
+          question-reading/writing posture would otherwise false-positive)
+  Pitch: above +15°   → signalling / looking back (always active)
   Roll:  monitored only, does NOT trigger alert independently
 """
 
@@ -76,7 +79,8 @@ class CandidateGazeState:
     Tracks gaze deviation state for a single candidate.
     Each detected face gets its own instance.
     """
-    def __init__(self, candidate_id: str, persistence_seconds: float):
+    def __init__(self, candidate_id: str, persistence_seconds: float,
+                 calibration_window_seconds: float = 180.0):
         self.candidate_id = candidate_id
         self.persistence_seconds = persistence_seconds
 
@@ -93,6 +97,50 @@ class CandidateGazeState:
         self.current_yaw = 0.0
         self.current_pitch = 0.0
         self.current_roll = 0.0
+
+        # --- Personalised downward-pitch calibration ---
+        # Captures each candidate's natural "reading/writing" pitch over
+        # the first N seconds, so normal head-down writing posture isn't
+        # mistaken for looking at hidden notes.
+        self.created_at = time.time()
+        self.calibration_window_seconds = calibration_window_seconds
+        self.pitch_samples: list = []
+        self.baseline_pitch: Optional[float] = None
+
+    def is_calibrating(self) -> bool:
+        """True while this candidate's personal pitch baseline is still open."""
+        return (self.baseline_pitch is None and
+                (time.time() - self.created_at) < self.calibration_window_seconds)
+
+    def add_pitch_sample(self, pitch: float):
+        """Record a pitch reading during the calibration window."""
+        self.pitch_samples.append(pitch)
+        if len(self.pitch_samples) > 5000:  # safety cap, ~ a few minutes at high FPS
+            self.pitch_samples = self.pitch_samples[-5000:]
+
+    def try_finalize_calibration(self, fallback_pitch: float):
+        """
+        Once the calibration window has elapsed, compute the candidate's
+        personal 'natural writing pitch' baseline from collected samples.
+        Uses the lower half (more downward) of samples, since candidates
+        also glance up/around while reading questions early on — we want
+        the baseline to represent their writing angle, not the average of
+        everything they did in the window.
+        """
+        if self.baseline_pitch is not None:
+            return  # already calibrated
+        if (time.time() - self.created_at) < self.calibration_window_seconds:
+            return  # window not finished yet
+
+        if self.pitch_samples:
+            sorted_samples = sorted(self.pitch_samples)  # most negative (down) first
+            cutoff = sorted_samples[:max(1, len(sorted_samples) // 2)]
+            self.baseline_pitch = sum(cutoff) / len(cutoff)
+        else:
+            # No samples somehow (e.g. candidate rarely faced camera) —
+            # fall back to the universal threshold rather than leaving
+            # this candidate permanently uncalibrated.
+            self.baseline_pitch = fallback_pitch
 
     def get_deviation_duration(self) -> float:
         """Returns how long current deviation has been ongoing."""
@@ -239,11 +287,15 @@ class GazeDetectionModule:
         # Gaze config (Section 3.6.3 and config.yaml)
         gaze_cfg = config['gaze_detection']
         self._yaw_threshold    = gaze_cfg['yaw_threshold']        # 30.0 degrees
-        self._pitch_down       = gaze_cfg['pitch_down_threshold']  # -20.0 degrees
+        self._pitch_down_fallback = gaze_cfg['pitch_down_threshold']  # -20.0 fallback only
         self._pitch_up         = gaze_cfg['pitch_up_threshold']    # +15.0 degrees
         self._persistence_secs = gaze_cfg['persistence_seconds']   # 3.0 seconds
         self._base_sustained   = gaze_cfg['base_score_sustained']  # 15 pts
         self._base_brief       = gaze_cfg['base_score_brief']      # 8 pts
+
+        # Personalised pitch-down calibration
+        self._pitch_calibration_secs = gaze_cfg['pitch_calibration_window_seconds']  # 180.0
+        self._pitch_down_margin = gaze_cfg['pitch_down_margin']    # 15.0 degrees
 
         # Each module has its OWN frame queue (Section 3.13)
         max_q = config['queues']['max_size']
@@ -396,7 +448,8 @@ class GazeDetectionModule:
             # Get or create per-candidate state
             if candidate_id not in self._candidate_states:
                 self._candidate_states[candidate_id] = CandidateGazeState(
-                    candidate_id, self._persistence_secs
+                    candidate_id, self._persistence_secs,
+                    calibration_window_seconds=self._pitch_calibration_secs
                 )
             state = self._candidate_states[candidate_id]
 
@@ -408,12 +461,17 @@ class GazeDetectionModule:
             state.current_pitch = pitch
             state.current_roll = roll
 
+            # Feed the personal pitch-down calibration
+            if state.is_calibrating():
+                state.add_pitch_sample(pitch)
+            state.try_finalize_calibration(fallback_pitch=self._pitch_down_fallback)
+
             # Store for draw_detections
             face_data.append((candidate_id, yaw, pitch, roll,
                               (x1, y1, x2, y2)))
 
             # Determine if head is in suspicious orientation
-            deviation_type = self._classify_deviation(yaw, pitch)
+            deviation_type = self._classify_deviation(yaw, pitch, state)
 
             if deviation_type:
                 # Head is outside normal range
@@ -469,23 +527,34 @@ class GazeDetectionModule:
 
         self._last_face_data = face_data
 
-    def _classify_deviation(self, yaw: float, pitch: float) -> Optional[str]:
+    def _classify_deviation(self, yaw: float, pitch: float,
+                             state: CandidateGazeState) -> Optional[str]:
         """
         Check if head orientation is outside normal range.
         Returns deviation type string or None if normal.
 
-        Chapter 3 Table 3.3:
-          Yaw outside ±30°      → "lateral"
-          Pitch below -20°      → "down"
-          Pitch above +15°      → "up"
+        Chapter 3 Table 3.3 (updated after false-positive testing):
+          Yaw outside ±30°  → "lateral"   — always active, incl. calibration
+          Pitch above +15°  → "up"        — always active, incl. calibration
+          Pitch down        → "down"      — ONLY checked once this candidate's
+                               personal baseline is calibrated. During the
+                               calibration window, downward pitch is never
+                               flagged — that's the whole point of learning
+                               each candidate's natural writing angle first.
           Roll not checked here (monitored but doesn't trigger)
         """
         if abs(yaw) > self._yaw_threshold:
             return "lateral"
-        if pitch < self._pitch_down:
-            return "down"
         if pitch > self._pitch_up:
             return "up"
+
+        # Downward pitch — personalised, and exempt during calibration
+        if state.baseline_pitch is not None:
+            effective_pitch_down = state.baseline_pitch - self._pitch_down_margin
+            if pitch < effective_pitch_down:
+                return "down"
+        # else: still calibrating — intentionally not checking "down" at all
+
         return None
 
     def _get_behaviour_type(self, deviation_type: str) -> str:
@@ -507,10 +576,16 @@ class GazeDetectionModule:
         for candidate_id, yaw, pitch, roll, bbox in self._last_face_data:
             x1, y1, x2, y2 = bbox
             state = self._candidate_states.get(candidate_id)
-            deviation_type = self._classify_deviation(yaw, pitch) if state else None
+            deviation_type = (self._classify_deviation(yaw, pitch, state)
+                               if state else None)
 
-            # Colour: green = normal, orange = deviating, red = alert triggered
-            if deviation_type is None:
+            calibrating = state.is_calibrating() if state else False
+
+            # Colour: blue = calibrating, green = normal,
+            # orange = deviating, red = alert triggered
+            if calibrating:
+                colour = (255, 165, 0)     # Blue — still learning baseline
+            elif deviation_type is None:
                 colour = (0, 255, 0)       # Green — normal
             elif state and state.get_deviation_duration() >= self._persistence_secs:
                 colour = (0, 0, 255)       # Red — sustained deviation
@@ -521,7 +596,8 @@ class GazeDetectionModule:
             cv2.rectangle(frame_out, (x1, y1), (x2, y2), colour, 2)
 
             # Draw angle labels
-            label1 = f"{candidate_id} Y:{yaw:.0f} P:{pitch:.0f} R:{roll:.0f}"
+            cal_tag = " [CALIBRATING]" if calibrating else ""
+            label1 = f"{candidate_id} Y:{yaw:.0f} P:{pitch:.0f} R:{roll:.0f}{cal_tag}"
             cv2.putText(frame_out, label1, (x1, y1 - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
 
