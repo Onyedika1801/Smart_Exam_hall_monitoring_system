@@ -289,6 +289,16 @@ class HeadPoseEstimator:
             yaw   = 0.0
             roll  = np.degrees(np.arctan2(-R[1, 2], R[1, 1]))
 
+        # Sign correction: confirmed via live testing that the raw
+        # extraction above comes out inverted on both axes relative to
+        # this module's documented convention (yaw: negative=left,
+        # positive=right; pitch: negative=down, positive=up). Facing
+        # down was producing positive pitch, and left/right were
+        # swapped. Negating both here keeps the rest of the pipeline
+        # (thresholds, calibration baseline, alert_manager) unchanged.
+        yaw = -yaw
+        pitch = -pitch
+
         return float(yaw), float(pitch), float(roll)
 
 
