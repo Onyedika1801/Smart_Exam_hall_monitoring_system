@@ -267,9 +267,21 @@ class HeadPoseEstimator:
         # version first rather than guessing again.
         angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
 
-        yaw   = angles[1]   # Left-right rotation
-        pitch = angles[0]   # Up-down tilt
-        roll  = angles[2]   # Lateral tilt
+        yaw   = angles[1]    # Left-right rotation
+        pitch = -angles[0]   # Up-down tilt — NEGATED. Live test data showed
+                              # this raw value comes out inverted: a clear
+                              # downward head tilt produced pitch ≈ +43
+                              # (crossing the +15 "up" threshold instead of
+                              # the -20 "down" one), and neutral/up poses
+                              # produced small negative values that never
+                              # crossed -20. Negating corrects both cases
+                              # to match the documented convention
+                              # (negative=down, positive=up).
+        roll  = angles[2]    # Lateral tilt — NOT used in flagging logic,
+                              # left as-is even though it shows odd ~180
+                              # values at moderate angles (cosmetic only,
+                              # doesn't affect thresholds since roll isn't
+                              # checked anywhere in _classify_deviation)
 
         return float(yaw), float(pitch), float(roll)
 
