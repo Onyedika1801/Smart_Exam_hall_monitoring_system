@@ -69,11 +69,52 @@ posture_analysis:
   base_score_brief: 5
 
 # --- Object Passing Module (Section 3.8) ---
+# See modules/object_passing.py docstring for full design rationale and
+# documented limitations (Option B below).
 object_passing:
+  model_path: "models/phone_detector_best.pt"   # TEMP: reuse existing weights
+                                                   # until a dedicated
+                                                   # paper/pen dataset is
+                                                   # trained (see limitations)
+  object_confidence_threshold: 0.35
   zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
   transfer_time_window_seconds: 1.5
   min_zone_separation: 0.15       # Min fraction of frame width between zones
   base_score: 30                  # Chapter 3 Table 3.5
+
+  # --- Hand-crossing detection (Option A) ---
+  # Rather than relying purely on per-zone object counts (which cannot
+  # detect a simultaneous swap — see limitations), track hand/wrist
+  # position via MediaPipe Hands and flag when a hand crosses the shared
+  # boundary between two adjacent candidate zones while holding an
+  # object-like shape near the wrist.
+  hand_detection_confidence: 0.5
+  hand_tracking_confidence: 0.5
+  boundary_margin_pixels: 40      # Width of the "shared edge" strip between
+                                   # adjacent zones that counts as a crossing
+  object_proximity_pixels: 60     # Max distance between wrist and a detected
+                                   # object box to count as "holding" it
+
+  # --- Attendance / mass-distribution burst detection (pattern 2) ---
+  # Attendance sheets, question papers, etc. are typically passed down a
+  # row in a short, synchronised burst at a known point in the exam
+  # (start, or a collection midway). This produces MANY simultaneous
+  # cross-zone hand movements across different candidate pairs within a
+  # few seconds — a distinct signature from an isolated, later, one-off
+  # transfer between two candidates, which is far more likely to be
+  # exam malpractice.
+  burst_detection_window_seconds: 8     # Look-back window for counting
+                                          # concurrent crossings
+  burst_min_concurrent_crossings: 3     # >= this many crossings across
+                                          # DIFFERENT zone-pairs within the
+                                          # window = treat as mass
+                                          # distribution, suppress scoring
+  # Simple fallback grace window (used alongside burst detection, not
+  # instead of it) — covers the very start of the exam when attendance
+  # is most predictably passed, even if burst detection's threshold
+  # isn't met for some reason (e.g. slow/staggered passing).
+  grace_window_seconds: 240             # First 4 minutes: crossings are
+                                          # logged but not scored
 
 # --- Scoring & Alert System (Section 3.10) ---
 scoring:
