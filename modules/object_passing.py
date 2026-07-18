@@ -223,6 +223,7 @@ class ObjectPassingModule:
         self._last_hand_zones: Dict[int, str] = {}
 
         self._frame_count = 0
+        self._frames_actually_processed = 0
         self._total_crossings_detected = 0
         self._total_events_emitted = 0
         self._total_events_suppressed_burst = 0
@@ -292,6 +293,7 @@ class ObjectPassingModule:
             self._frames_skipped += 1
             return []
 
+        self._frames_actually_processed += 1
         events: List[DetectionEvent] = []
 
         object_boxes = self._detect_objects(frame)
@@ -425,7 +427,8 @@ class ObjectPassingModule:
     # --------------------------------------------------------
     def get_stats(self) -> dict:
         return {
-            'frames_processed': self._frame_count,
+            'total_frames_seen': self._frame_count,
+            'frames_actually_processed': self._frames_actually_processed,
             'frames_skipped': self._frames_skipped,
             'total_crossings_detected': self._total_crossings_detected,
             'events_emitted': self._total_events_emitted,

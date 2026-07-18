@@ -127,8 +127,9 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
         stats = module.get_stats()
         overlay = [
             f"Camera FPS: {camera_fps:.1f}",
-            f"Frames processed: {stats['frames_processed']} "
-            f"(skipped: {stats['frames_skipped']})",
+            f"Frames seen: {stats['total_frames_seen']} "
+            f"(processed: {stats['frames_actually_processed']}, "
+            f"skipped: {stats['frames_skipped']})",
             f"Crossings detected: {stats['total_crossings_detected']}",
             f"Events emitted: {stats['events_emitted']}",
             f"Suppressed (grace): {stats['suppressed_grace_window']}",
@@ -157,7 +158,7 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
 
     print("\nStructural checks:")
     checks = [
-        ("Ran without crashing", stats['frames_processed'] > 0),
+        ("Ran without crashing", stats['total_frames_seen'] > 0),
         ("Detected >= 1 hand crossing", stats['total_crossings_detected'] > 0),
         ("Grace/burst suppression logic executed",
          stats['suppressed_grace_window'] > 0 or stats['suppressed_burst'] > 0
