@@ -130,6 +130,7 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
             f"Frames seen: {stats['total_frames_seen']} "
             f"(processed: {stats['frames_actually_processed']}, "
             f"skipped: {stats['frames_skipped']})",
+            f"Hand observations: {stats['total_hand_observations']}",
             f"Crossings detected: {stats['total_crossings_detected']}",
             f"Events emitted: {stats['events_emitted']}",
             f"Suppressed (grace): {stats['suppressed_grace_window']}",

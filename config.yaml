@@ -100,6 +100,15 @@ object_passing:
                                    # adjacent zones that counts as a crossing
   object_proximity_pixels: 60     # Max distance between wrist and a detected
                                    # object box to count as "holding" it
+  max_hand_movement_pixels: 180   # Max distance a hand can move between
+                                   # two PROCESSED (non-skipped) frames and
+                                   # still be considered "the same hand" for
+                                   # crossing detection. Needs to be larger
+                                   # than a bucket/tile size specifically
+                                   # BECAUSE of frame_skip — with 5/6 frames
+                                   # skipped, real hand movement between
+                                   # sampled frames is larger than it would
+                                   # be frame-to-frame at full rate.
 
   # --- Attendance / mass-distribution burst detection (pattern 2) ---
   # Attendance sheets, question papers, etc. are typically passed down a

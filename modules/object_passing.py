@@ -215,12 +215,23 @@ class ObjectPassingModule:
             min_tracking_confidence=cfg['hand_tracking_confidence'],
         )
 
-        # Track each hand's last-seen zone so we can detect a crossing
-        # (zone changed between consecutive observations of "the same"
-        # hand). Keyed loosely by approximate wrist position bucket,
-        # since MediaPipe Hands doesn't give persistent hand IDs across
-        # frames by default.
-        self._last_hand_zones: Dict[int, str] = {}
+        # Track each hand's last-seen (position, zone) so we can detect a
+        # crossing (zone changed between consecutive PROCESSED frames for
+        # "the same" hand). MediaPipe Hands doesn't give persistent hand
+        # IDs across frames, so "same hand" is approximated by nearest-
+        # neighbour position matching rather than exact-bucket matching.
+        #
+        # NOTE: an earlier version used exact quantized-bucket matching,
+        # which broke once frame_skip was introduced — with 5 of every 6
+        # frames skipped, a hand's real-world position moves noticeably
+        # between the frames that ARE processed, easily landing in a
+        # different bucket each time, so "last_zone" was never found and
+        # crossings were never detected at all (confirmed: 0 crossings
+        # even with deliberate hand movement across a boundary in live
+        # testing). Nearest-neighbour matching within max_hand_movement_px
+        # tolerates that larger gap between sampled frames.
+        self._last_hand_positions: List[Tuple[float, float, str]] = []  # (x, y, zone_id)
+        self._max_hand_movement_px = cfg['max_hand_movement_pixels']
 
         self._frame_count = 0
         self._frames_actually_processed = 0
@@ -230,6 +241,8 @@ class ObjectPassingModule:
         self._total_events_suppressed_grace = 0
         self._total_events_suppressed_zone_separation = 0
         self._frames_skipped = 0
+        self._total_hand_observations = 0   # diagnostic: are hands even
+                                              # being detected at all?
 
     # --------------------------------------------------------
     def _in_grace_window(self, now: float) -> bool:
@@ -250,16 +263,21 @@ class ObjectPassingModule:
         r_part, c_part = zone_id[1:].split('C')
         return int(r_part), int(c_part)
 
-    @staticmethod
-    def _hand_bucket_id(x: float, y: float, bucket_size: int = 50) -> int:
+    def _find_matching_last_hand(self, x: float, y: float) -> Optional[str]:
         """
-        Coarse spatial bucketing used as a cheap stand-in for a
-        persistent per-hand ID, since we're deliberately avoiding full
-        object/hand tracking (see module docstring). Good enough to
-        notice "a hand near here moved to a different zone" across
-        consecutive frames without the cost of real tracking.
+        Find the closest hand position from the PREVIOUS processed frame,
+        within max_hand_movement_px. Returns that hand's zone_id if found,
+        else None (no plausible match = treat as a newly-appeared hand,
+        not a crossing).
         """
-        return int(x // bucket_size) * 10_000 + int(y // bucket_size)
+        best_zone = None
+        best_dist = self._max_hand_movement_px
+        for (px, py, pzone) in self._last_hand_positions:
+            dist = ((x - px) ** 2 + (y - py) ** 2) ** 0.5
+            if dist <= best_dist:
+                best_dist = dist
+                best_zone = pzone
+        return best_zone
 
     # --------------------------------------------------------
     def process_frame(self, frame: np.ndarray, frame_number: int) -> List[DetectionEvent]:
@@ -298,19 +316,20 @@ class ObjectPassingModule:
 
         object_boxes = self._detect_objects(frame)
         hand_positions = self._detect_hands(frame)
+        self._total_hand_observations += len(hand_positions)
 
-        current_hand_zones: Dict[int, str] = {}
+        current_hand_positions: List[Tuple[float, float, str]] = []
 
         for wrist_x, wrist_y in hand_positions:
             zone_id = self._zone_tracker.get_candidate_id(wrist_x, wrist_y)
-            bucket = self._hand_bucket_id(wrist_x, wrist_y)
-            current_hand_zones[bucket] = zone_id
 
             holding_object = self._is_holding_object(
                 wrist_x, wrist_y, object_boxes
             )
 
-            last_zone = self._last_hand_zones.get(bucket)
+            last_zone = self._find_matching_last_hand(wrist_x, wrist_y)
+            current_hand_positions.append((wrist_x, wrist_y, zone_id))
+
             if (last_zone is not None and last_zone != zone_id and
                     self._get_adjacent_zone_pairs_boundary(last_zone, zone_id) and
                     self._near_boundary(wrist_x, wrist_y)):
@@ -327,7 +346,7 @@ class ObjectPassingModule:
                     if event is not None:
                         events.append(event)
 
-        self._last_hand_zones = current_hand_zones
+        self._last_hand_positions = current_hand_positions
         return events
 
     # --------------------------------------------------------
@@ -430,6 +449,7 @@ class ObjectPassingModule:
             'total_frames_seen': self._frame_count,
             'frames_actually_processed': self._frames_actually_processed,
             'frames_skipped': self._frames_skipped,
+            'total_hand_observations': self._total_hand_observations,
             'total_crossings_detected': self._total_crossings_detected,
             'events_emitted': self._total_events_emitted,
             'suppressed_grace_window': self._total_events_suppressed_grace,
