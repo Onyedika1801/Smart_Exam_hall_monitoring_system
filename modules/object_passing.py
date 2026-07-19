@@ -330,9 +330,23 @@ class ObjectPassingModule:
             last_zone = self._find_matching_last_hand(wrist_x, wrist_y)
             current_hand_positions.append((wrist_x, wrist_y, zone_id))
 
+            # A crossing is proven by: zone changed + the two zones are
+            # adjacent + the movement was within max_hand_movement_px
+            # (already enforced by _find_matching_last_hand's distance
+            # cap). That's sufficient evidence on its own.
+            #
+            # An earlier version ALSO required the hand's CURRENT position
+            # to be within boundary_margin_pixels of a grid line — this
+            # was too strict once frame_skip was in play: by the time a
+            # frame is actually sampled, the hand may have already moved
+            # well past that narrow strip into the new zone, even though
+            # a genuine crossing just happened. That extra check was
+            # silently discarding valid crossings (observed ~10/50 hand
+            # observations registering a crossing on deliberate movement
+            # -- lower than expected). Removed as redundant with the
+            # conditions above.
             if (last_zone is not None and last_zone != zone_id and
-                    self._get_adjacent_zone_pairs_boundary(last_zone, zone_id) and
-                    self._near_boundary(wrist_x, wrist_y)):
+                    self._get_adjacent_zone_pairs_boundary(last_zone, zone_id)):
 
                 self._total_crossings_detected += 1
                 crossing = CrossingEvent(
@@ -427,21 +441,11 @@ class ObjectPassingModule:
                 return True
         return False
 
-    def _near_boundary(self, x: float, y: float) -> bool:
-        """
-        True if (x, y) is within boundary_margin_pixels of a grid line,
-        i.e. genuinely in the shared "handoff" strip between zones
-        rather than just anywhere inside a zone.
-        """
-        cell_w = self._zone_tracker.cell_w
-        cell_h = self._zone_tracker.cell_h
-        x_in_cell = x % cell_w
-        y_in_cell = y % cell_h
-        near_vertical_edge = (x_in_cell <= self._boundary_margin or
-                               (cell_w - x_in_cell) <= self._boundary_margin)
-        near_horizontal_edge = (y_in_cell <= self._boundary_margin or
-                                 (cell_h - y_in_cell) <= self._boundary_margin)
-        return near_vertical_edge or near_horizontal_edge
+    # NOTE: _near_boundary() was removed — it was an overly strict extra
+    # gate on crossing detection that became counterproductive once
+    # frame_skip was introduced (see process_frame comment above for the
+    # full reasoning). Zone adjacency + a bounded max movement distance
+    # between samples is sufficient evidence of a genuine crossing.
 
     # --------------------------------------------------------
     def get_stats(self) -> dict:
