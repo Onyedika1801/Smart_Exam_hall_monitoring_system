@@ -18,46 +18,35 @@ separately-tested pieces:
 Each detection module runs in its own thread with its own private frame
 queue (Section 3.13). Only the alert_queue is shared across all of them.
 
-ARCHITECTURAL NOTE — read before relying on this file:
---------------------------------------------------------
-phone_detection.py, gaze_detection.py, and posture_analysis.py already
-implement their own self-contained threading (start() / stop() /
-put_frame() / internal _run() loop that pushes DetectionEvents directly
-onto a shared alert_queue passed at construction).
+All four detection modules — phone_detection.py, gaze_detection.py,
+posture_analysis.py, and object_passing.py — now follow the IDENTICAL
+self-contained threading pattern: start() / stop() / put_frame() /
+internal _run() loop that pushes DetectionEvents directly onto a shared
+alert_queue passed at construction. main.py simply constructs each one
+with (config, alert_queue), calls .start(), and feeds frames via
+.put_frame() in the camera loop below — no special-casing needed.
 
-object_passing.py does NOT follow that same pattern — it was built to be
-called synchronously (process_frame() returns events rather than
-threading itself and pushing to alert_queue internally), and takes a
-zone_tracker + frame dimensions directly rather than an alert_queue.
-This inconsistency was identified during main.py integration but
-deliberately NOT fixed by changing object_passing.py itself, since the
-person testing this project was actively mid-way through isolation-
-testing that exact module and script when this was built — changing its
-interface then would have invalidated testing already in progress.
-
-Instead, ObjectPassingThreadWrapper below gives it the same external
-shape (own thread, own queue, pushes to alert_queue) WITHOUT modifying
-object_passing.py or test_object_passing.py at all. If you retrofit
-object_passing.py later to self-thread like the other three, this
-wrapper class can be deleted and construction below simplified to match
-the other three modules' pattern.
+(object_passing.py was retrofitted to this pattern after initially
+being built with a different, synchronous interface — see git history
+for that change if curious. This file was updated to match once the
+retrofit was in place.)
 
 CANDIDATE ID CONSISTENCY ACROSS MODULES:
 ------------------------------------------
-phone_detection.py, gaze_detection.py, and posture_analysis.py EACH
-create their own internal CandidateZoneTracker lazily on first frame
-(they do not accept a shared instance). CandidateZoneTracker itself is
-stateless — get_candidate_id() is a pure function of
-(x, y, frame_width, frame_height, grid_cols, grid_rows) with no memory
-between calls — so as long as every module receives frames of identical
-dimensions (guaranteed here, since all four are fed from the same
-camera read) and use the same default grid_cols=5/grid_rows=4, separate
-instances still produce IDENTICAL candidate_id strings for the same
-physical position. This has been verified by inspecting each module's
-source, not assumed. If any module's grid defaults are ever changed,
-they must be changed in ALL FOUR simultaneously or candidate_id values
-will silently stop matching across modules, breaking alert_manager's
-combination-bonus scoring (Section 3.10.4).
+All four modules EACH create their own internal CandidateZoneTracker
+lazily on first frame (none of them accept a shared instance).
+CandidateZoneTracker itself is stateless — get_candidate_id() is a pure
+function of (x, y, frame_width, frame_height, grid_cols, grid_rows)
+with no memory between calls — so as long as every module receives
+frames of identical dimensions (guaranteed here, since all four are fed
+from the same camera read) and use the same default grid_cols=5/
+grid_rows=4, separate instances still produce IDENTICAL candidate_id
+strings for the same physical position. This has been verified by
+inspecting each module's source, not assumed. If any module's grid
+defaults are ever changed, they must be changed in ALL FOUR
+simultaneously or candidate_id values will silently stop matching
+across modules, breaking alert_manager's combination-bonus scoring
+(Section 3.10.4).
 
 USAGE:
     python main.py --source 0
@@ -71,7 +60,6 @@ import logging
 import queue
 import signal
 import sys
-import threading
 import time
 from typing import Optional
 
@@ -80,7 +68,7 @@ import yaml
 
 from modules.phone_detection import PhoneDetectionModule, DetectionEvent
 from modules.gaze_detection import GazeDetectionModule
-from modules.posture_analysis import PostureAnalysisModule, CandidateZoneTracker
+from modules.posture_analysis import PostureAnalysisModule
 from modules.object_passing import ObjectPassingModule
 from alert_manager import AlertManager
 
@@ -95,81 +83,6 @@ logger = logging.getLogger(__name__)
 def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
-
-
-# ============================================================
-# Wrapper: gives object_passing.py the same external shape as the
-# other three self-threading modules, without modifying that module.
-# See module docstring above for why this exists.
-# ============================================================
-class ObjectPassingThreadWrapper:
-    def __init__(self, config: dict, alert_queue: "queue.Queue[DetectionEvent]",
-                 frame_width: int, frame_height: int):
-        self.alert_queue = alert_queue
-
-        max_q = config['queues']['max_size']
-        self.frame_queue: "queue.Queue" = queue.Queue(maxsize=max_q)
-
-        # Uses the SAME default grid (grid_cols=5, grid_rows=4) as the
-        # other three modules' internally-created trackers — see the
-        # "Candidate ID Consistency" note in this file's module docstring.
-        self._zone_tracker = CandidateZoneTracker(frame_width, frame_height)
-        self._module = ObjectPassingModule(config, self._zone_tracker,
-                                            frame_width, frame_height)
-
-        self._thread = threading.Thread(target=self._run, daemon=True,
-                                         name="ObjectPassingThread")
-        self._stop_event = threading.Event()
-        self._start_time: Optional[float] = None
-        self.frames_processed = 0
-
-    def start(self):
-        self._start_time = time.time()
-        self._thread.start()
-        logger.info("[ObjectPassingWrapper] Thread started")
-
-    def stop(self):
-        self._stop_event.set()
-        self._thread.join(timeout=5.0)
-        logger.info(f"[ObjectPassingWrapper] Stopped. "
-                    f"Processed {self.frames_processed} frames.")
-
-    def put_frame(self, frame, frame_number: int):
-        try:
-            self.frame_queue.put_nowait((frame, frame_number))
-        except queue.Full:
-            try:
-                self.frame_queue.get_nowait()  # drop oldest, stay real-time
-            except queue.Empty:
-                pass
-            try:
-                self.frame_queue.put_nowait((frame, frame_number))
-            except queue.Full:
-                pass
-
-    def get_stats(self) -> dict:
-        inner = self._module.get_stats()
-        elapsed = time.time() - self._start_time if self._start_time else 0
-        inner['fps'] = round(self.frames_processed / elapsed, 2) if elapsed > 0 else 0
-        inner['queue_size'] = self.frame_queue.qsize()
-        return inner
-
-    def _run(self):
-        while not self._stop_event.is_set():
-            try:
-                frame, frame_number = self.frame_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            try:
-                events = self._module.process_frame(frame, frame_number)
-                for event in events:
-                    try:
-                        self.alert_queue.put_nowait(event)
-                    except queue.Full:
-                        logger.warning("[ObjectPassingWrapper] Alert queue full — event dropped")
-            except Exception as e:
-                logger.error(f"[ObjectPassingWrapper] Frame {frame_number} error: {e}")
-            self.frames_processed += 1
 
 
 # ============================================================
@@ -190,7 +103,7 @@ class ExamMonitoringSystem:
         self.phone_module: Optional[PhoneDetectionModule] = None
         self.gaze_module: Optional[GazeDetectionModule] = None
         self.posture_module: Optional[PostureAnalysisModule] = None
-        self.object_passing_module: Optional[ObjectPassingThreadWrapper] = None
+        self.object_passing_module: Optional[ObjectPassingModule] = None
         self.alert_manager: Optional[AlertManager] = None
 
         self._running = False
@@ -219,12 +132,14 @@ class ExamMonitoringSystem:
     def _init_modules(self):
         logger.info("[Main] Initialising detection modules...")
 
+        # All four modules now share the identical construction pattern:
+        # (config, alert_queue, camera_id=...) — see module docstring's
+        # "Candidate ID Consistency" note for why separate internal zone
+        # trackers per module still produce matching candidate_id values.
         self.phone_module = PhoneDetectionModule(self.config, self.alert_queue)
         self.gaze_module = GazeDetectionModule(self.config, self.alert_queue)
         self.posture_module = PostureAnalysisModule(self.config, self.alert_queue)
-        self.object_passing_module = ObjectPassingThreadWrapper(
-            self.config, self.alert_queue, self.frame_width, self.frame_height
-        )
+        self.object_passing_module = ObjectPassingModule(self.config, self.alert_queue)
 
         def on_alert(alert_dict: dict):
             # Placeholder hook — the Flask/SSE dashboard will subscribe
@@ -355,8 +270,8 @@ class ExamMonitoringSystem:
             ("object_passing", self.object_passing_module),
         ]:
             stats = module.get_stats()
-            print(f"  {name:<18} queue={stats.get('queue_size', '?'):<4} "
-                  f"processed={stats.get('frames_processed', stats.get('frames_actually_processed', '?'))}")
+            print(f"  {name:<18} queue={stats['queue_size']:<4} "
+                  f"processed={stats['frames_processed']} fps={stats.get('fps', '?')}")
 
         candidates = self.alert_manager.get_all_candidate_states()
         if candidates:

@@ -22,7 +22,20 @@ IMPORTANT — READ BEFORE TESTING:
     - The grace window suppresses ALL scored events for the first few
       minutes (see config.yaml: grace_window_seconds) to avoid flagging
       attendance-sheet passing. Crossings during this window are still
-      logged to the terminal but will not appear as red boxes.
+      counted internally but will not appear as red boxes or terminal
+      prints — check the "Suppressed (grace)" stat to confirm this is
+      what's happening rather than nothing being detected at all.
+
+NOTE ON THIS MODULE'S ARCHITECTURE (updated):
+    ObjectPassingModule now self-threads exactly like phone_detection.py,
+    gaze_detection.py, and posture_analysis.py — it owns its own thread
+    and frame_queue, and pushes DetectionEvents directly onto a shared
+    alert_queue rather than returning them from a synchronous call. This
+    test script therefore constructs its own local alert_queue (used by
+    nothing else, since this is an isolated single-module test) and
+    drains it each loop to print/log events — this exactly mirrors how
+    the real system observes this module's output once integrated via
+    main.py, rather than being a special isolation-only code path.
 """
 
 import argparse
@@ -36,7 +49,6 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.object_passing import ObjectPassingModule
-from modules.posture_analysis import CandidateZoneTracker
 from modules.phone_detection import DetectionEvent
 
 
@@ -70,7 +82,7 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
     print("Active thresholds (from config.yaml):")
     print(f"  Object confidence:   {op_cfg['object_confidence_threshold']}")
     print(f"  Base score:          {op_cfg['base_score']}")
-    print(f"  Boundary margin:     {op_cfg['boundary_margin_pixels']}px")
+    print(f"  Frame skip:          1-in-{op_cfg['frame_skip']}")
     print(f"  Grace window:        {op_cfg['grace_window_seconds']}s")
     print(f"  Burst window:        {op_cfg['burst_detection_window_seconds']}s "
           f"(>= {op_cfg['burst_min_concurrent_crossings']} concurrent pairs = suppressed)")
@@ -82,13 +94,15 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
         print(f"❌ Could not open source: {source}")
         return
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or config['camera']['width']
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or config['camera']['height']
+    # Local alert_queue — nothing else consumes it in this isolated test.
+    # In the real system (main.py), this same queue is shared across all
+    # four modules and drained by alert_manager instead of this script.
+    alert_queue: "queue.Queue[DetectionEvent]" = queue.Queue(maxsize=100)
 
-    zone_tracker = CandidateZoneTracker(frame_width, frame_height)
-    module = ObjectPassingModule(config, zone_tracker, frame_width, frame_height)
+    module = ObjectPassingModule(config, alert_queue, camera_id="isolation_test")
+    module.start()
 
-    print("Loading YOLO + MediaPipe Hands...")
+    print("Loading YOLO + MediaPipe Hands (in background thread)...")
     print("✅ ObjectPassingModule started")
     print("\nMove a hand holding an object across a grid boundary to test.")
     print("Press Q to quit.\n")
@@ -97,58 +111,69 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
     fps_timer = time.time()
     fps_counter = 0
     camera_fps = 0.0
-    last_events: list = []
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("⚠️  Frame read failed / end of video.")
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️  Frame read failed / end of video.")
+                break
 
-        frame_number += 1
-        fps_counter += 1
-        if time.time() - fps_timer >= 1.0:
-            camera_fps = fps_counter / (time.time() - fps_timer)
-            fps_counter = 0
-            fps_timer = time.time()
+            frame_number += 1
+            fps_counter += 1
+            if time.time() - fps_timer >= 1.0:
+                camera_fps = fps_counter / (time.time() - fps_timer)
+                fps_counter = 0
+                fps_timer = time.time()
 
-        new_events = module.process_frame(frame, frame_number)
-        for event in new_events:
-            print_event(event)
-        if new_events:
-            last_events = new_events  # only draw THIS frame's events —
-                                       # see gaze/phone modules' fix for
-                                       # why we don't accumulate history
-        else:
-            last_events = []
+            module.put_frame(frame, frame_number)
 
-        display_frame = module.draw_detections(frame, last_events)
+            # Drain any events the background thread pushed since last
+            # loop iteration — this is how the real system (alert_manager)
+            # would consume them too.
+            while True:
+                try:
+                    event = alert_queue.get_nowait()
+                except queue.Empty:
+                    break
+                print_event(event)
 
-        stats = module.get_stats()
-        overlay = [
-            f"Camera FPS: {camera_fps:.1f}",
-            f"Frames seen: {stats['total_frames_seen']} "
-            f"(processed: {stats['frames_actually_processed']}, "
-            f"skipped: {stats['frames_skipped']})",
-            f"Hand observations: {stats['total_hand_observations']}",
-            f"Crossings detected: {stats['total_crossings_detected']}",
-            f"Events emitted: {stats['events_emitted']}",
-            f"Suppressed (grace): {stats['suppressed_grace_window']}",
-            f"Suppressed (burst): {stats['suppressed_burst']}",
-            f"Suppressed (zone sep): {stats['suppressed_zone_separation']}",
-            f"Zone separation OK: {stats['zone_separation_reliable']}",
-            f"In grace window: {stats['in_grace_window']}",
-        ]
-        for i, line in enumerate(overlay):
-            cv2.putText(display_frame, line, (10, 20 + i * 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # get_last_frame_events() is an isolation-test convenience —
+            # lets us draw boxes for whatever the module's background
+            # thread most recently processed, without needing frame-exact
+            # synchronisation with the queue drain above.
+            display_frame = module.draw_detections(
+                frame, module.get_last_frame_events()
+            )
 
-        cv2.imshow("Object Passing — Isolation Test (Q to quit)", display_frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            stats = module.get_stats()
+            overlay = [
+                f"Camera FPS: {camera_fps:.1f} | Module FPS: {stats['fps']}",
+                f"Frames processed: {stats['frames_processed']} "
+                f"(actually ran models: {stats['frames_actually_processed']}, "
+                f"skipped: {stats['frames_skipped']})",
+                f"Queue size: {stats['queue_size']}",
+                f"Hand observations: {stats['total_hand_observations']}",
+                f"Crossings detected: {stats['total_crossings_detected']}",
+                f"Events emitted: {stats['events_emitted']}",
+                f"Suppressed (grace): {stats['suppressed_grace_window']}",
+                f"Suppressed (burst): {stats['suppressed_burst']}",
+                f"Suppressed (zone sep): {stats['suppressed_zone_separation']}",
+                f"Zone separation OK: {stats['zone_separation_reliable']}",
+                f"In grace window: {stats['in_grace_window']}",
+            ]
+            for i, line in enumerate(overlay):
+                cv2.putText(display_frame, line, (10, 20 + i * 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-    cap.release()
-    cv2.destroyAllWindows()
+            cv2.imshow("Object Passing — Isolation Test (Q to quit)", display_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    finally:
+        module.stop()
+        cap.release()
+        cv2.destroyAllWindows()
 
     stats = module.get_stats()
     print("\n" + "=" * 60)
@@ -159,7 +184,7 @@ def run_isolation_test(source, config_path: str = "config.yaml"):
 
     print("\nStructural checks:")
     checks = [
-        ("Ran without crashing", stats['total_frames_seen'] > 0),
+        ("Ran without crashing", stats['frames_processed'] > 0),
         ("Detected >= 1 hand crossing", stats['total_crossings_detected'] > 0),
         ("Grace/burst suppression logic executed",
          stats['suppressed_grace_window'] > 0 or stats['suppressed_burst'] > 0

@@ -71,6 +71,8 @@ DOCUMENTED LIMITATIONS (Option B — honesty over overclaiming)
 
 import time
 import logging
+import threading
+import queue
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
 
@@ -147,25 +149,31 @@ class BurstTracker:
 # ============================================================
 
 class ObjectPassingModule:
-    def __init__(self, config: dict, zone_tracker: CandidateZoneTracker,
-                 frame_width: int, frame_height: int):
-        cfg = config['object_passing']
+    """
+    Usage (matches phone_detection.py / gaze_detection.py /
+    posture_analysis.py exactly):
 
-        # IMPORTANT: shared zone_tracker instance — must be the SAME
-        # object used by posture_analysis / gaze_detection so a given
-        # physical seat maps to the same candidate_id across modules.
-        # This is required for alert_manager's combination-bonus scoring
-        # to correctly associate signals from different modules with
-        # the same candidate.
-        self._zone_tracker = zone_tracker
-        self._frame_width = frame_width
-        self._frame_height = frame_height
+        module = ObjectPassingModule(config, alert_queue, camera_id="cam_0")
+        module.start()
+        # Feed frames:
+        module.put_frame(frame, frame_number)
+        # Stop:
+        module.stop()
+    """
+    def __init__(self, config: dict, alert_queue, camera_id: str = "cam_0"):
+        self.config = config
+        self.alert_queue = alert_queue
+        self.camera_id = camera_id
+        cfg = config['object_passing']
 
         self._object_conf = cfg['object_confidence_threshold']
         self._frame_skip = cfg['frame_skip']
         self._base_score = cfg['base_score']
         self._boundary_margin = cfg['boundary_margin_pixels']
         self._object_proximity = cfg['object_proximity_pixels']
+        self._model_path = cfg['model_path']
+        self._hand_detection_conf = cfg['hand_detection_confidence']
+        self._hand_tracking_conf = cfg['hand_tracking_confidence']
 
         self._grace_window_seconds = cfg['grace_window_seconds']
         self._burst_tracker = BurstTracker(
@@ -174,23 +182,128 @@ class ObjectPassingModule:
         )
 
         self._module_start_time = time.time()
-
-        # --- Minimum zone separation guard ---
-        # NOTE: this module's zones are FIXED GRID CELLS (CandidateZoneTracker),
-        # not per-candidate bounding boxes derived from live pose detection.
-        # Grid cells can never geometrically "overlap" the way pose-derived
-        # zones could, so the specific overlap check doesn't apply as-is.
-        # The underlying risk is the same though: if cells are small
-        # relative to real candidate seat spacing, hand-crossing detection
-        # becomes unreliable/spurious near boundaries — a candidate's own
-        # natural hand movement within a too-small cell can look like a
-        # "crossing." min_zone_separation (config.yaml) is applied here as
-        # a minimum cell width, expressed as a fraction of frame width. If
-        # violated, we don't guess — we log a clear warning and disable
-        # scored crossing events entirely until the grid is reconfigured,
-        # rather than silently generating unreliable alerts.
         self._min_zone_separation = cfg['min_zone_separation']
-        cell_fraction_of_width = self._zone_tracker.cell_w / frame_width
+        self._max_hand_movement_px = cfg['max_hand_movement_pixels']
+
+        # Each module has its OWN frame queue (Section 3.13)
+        max_q = config['queues']['max_size']
+        self.frame_queue: "queue.Queue" = queue.Queue(maxsize=max_q)
+
+        # Threading — matches phone_detection.py / gaze_detection.py /
+        # posture_analysis.py exactly
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                         name="ObjectPassingThread")
+        self._stop_event = threading.Event()
+
+        # Model + zone tracker — loaded/created in thread to avoid
+        # blocking the main thread, and lazily on first frame respectively
+        # (same pattern as the other three modules)
+        self._model = None
+        self._hands = None
+        self._zone_tracker: Optional[CandidateZoneTracker] = None
+        self._zone_separation_reliable = True  # finalised once zone_tracker exists
+        self._frame_width = 0
+        self._frame_height = 0
+
+        self._last_hand_positions: List[Tuple[float, float, str]] = []
+
+        # Stats
+        self.frames_processed = 0
+        self.detections_total = 0
+        self._start_time = None
+        self._frames_actually_processed = 0
+        self._total_crossings_detected = 0
+        self._total_events_emitted = 0
+        self._total_events_suppressed_burst = 0
+        self._total_events_suppressed_grace = 0
+        self._total_events_suppressed_zone_separation = 0
+        self._frames_skipped = 0
+        self._total_hand_observations = 0
+
+        # Last frame's events — kept for draw_detections() during
+        # isolation testing, since events are now pushed to alert_queue
+        # rather than returned directly (matches the other three
+        # modules' architecture)
+        self._last_frame_events: List[DetectionEvent] = []
+
+        logger.info(f"[ObjectPassing] Module initialised — camera: {camera_id}")
+
+    def start(self):
+        """Start the detection thread."""
+        self._start_time = time.time()
+        self._thread.start()
+        logger.info("[ObjectPassing] Thread started")
+
+    def stop(self):
+        """Signal the thread to stop and wait for it."""
+        self._stop_event.set()
+        self._thread.join(timeout=5.0)
+        logger.info(f"[ObjectPassing] Stopped. "
+                    f"Processed {self.frames_processed} frames, "
+                    f"{self.detections_total} detections total.")
+
+    def put_frame(self, frame: np.ndarray, frame_number: int):
+        """
+        Add a frame to this module's queue.
+        If queue is full, drop oldest frame to stay real-time (Section 3.13).
+        """
+        try:
+            self.frame_queue.put_nowait((frame, frame_number))
+        except queue.Full:
+            try:
+                self.frame_queue.get_nowait()  # Drop oldest
+            except queue.Empty:
+                pass
+            try:
+                self.frame_queue.put_nowait((frame, frame_number))
+            except queue.Full:
+                pass
+
+    # --------------------------------------------------------
+    # Internal — runs in dedicated thread
+    # --------------------------------------------------------
+    def _run(self):
+        """Main detection loop — runs in its own thread."""
+        self._load_models()
+
+        while not self._stop_event.is_set():
+            try:
+                frame, frame_number = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            try:
+                self._process_frame(frame, frame_number)
+            except Exception as e:
+                logger.error(f"[ObjectPassing] Frame {frame_number} error: {e}")
+
+            self.frames_processed += 1
+
+    def _load_models(self):
+        """Load YOLO + MediaPipe Hands. Called once when thread starts."""
+        try:
+            logger.info(f"[ObjectPassing] Loading model: {self._model_path}")
+            self._model = YOLO(self._model_path)
+            self._hands = mp.solutions.hands.Hands(
+                static_image_mode=False,
+                max_num_hands=8,
+                min_detection_confidence=self._hand_detection_conf,
+                min_tracking_confidence=self._hand_tracking_conf,
+            )
+            logger.info("[ObjectPassing] Models loaded successfully")
+        except Exception as e:
+            logger.error(f"[ObjectPassing] Failed to load models: {e}")
+            self._stop_event.set()
+
+    def _init_zone_tracker_if_needed(self, frame: np.ndarray):
+        if self._zone_tracker is not None:
+            return
+        h, w = frame.shape[:2]
+        self._frame_width, self._frame_height = w, h
+        self._zone_tracker = CandidateZoneTracker(w, h)
+
+        # --- Minimum zone separation guard (see module docstring) ---
+        cell_fraction_of_width = self._zone_tracker.cell_w / w
         self._zone_separation_reliable = cell_fraction_of_width >= self._min_zone_separation
         if not self._zone_separation_reliable:
             logger.warning(
@@ -203,46 +316,6 @@ class ObjectPassingModule:
                 f"grid_rows are reduced or the camera's field of view is "
                 f"widened to space candidates further apart per cell."
             )
-
-        # NOTE: reusing phone-detection weights as a placeholder object
-        # detector — see module docstring "Documented Limitations".
-        self._model = YOLO(cfg['model_path'])
-
-        self._hands = mp.solutions.hands.Hands(
-            static_image_mode=False,
-            max_num_hands=8,   # allow multiple candidates' hands in frame
-            min_detection_confidence=cfg['hand_detection_confidence'],
-            min_tracking_confidence=cfg['hand_tracking_confidence'],
-        )
-
-        # Track each hand's last-seen (position, zone) so we can detect a
-        # crossing (zone changed between consecutive PROCESSED frames for
-        # "the same" hand). MediaPipe Hands doesn't give persistent hand
-        # IDs across frames, so "same hand" is approximated by nearest-
-        # neighbour position matching rather than exact-bucket matching.
-        #
-        # NOTE: an earlier version used exact quantized-bucket matching,
-        # which broke once frame_skip was introduced — with 5 of every 6
-        # frames skipped, a hand's real-world position moves noticeably
-        # between the frames that ARE processed, easily landing in a
-        # different bucket each time, so "last_zone" was never found and
-        # crossings were never detected at all (confirmed: 0 crossings
-        # even with deliberate hand movement across a boundary in live
-        # testing). Nearest-neighbour matching within max_hand_movement_px
-        # tolerates that larger gap between sampled frames.
-        self._last_hand_positions: List[Tuple[float, float, str]] = []  # (x, y, zone_id)
-        self._max_hand_movement_px = cfg['max_hand_movement_pixels']
-
-        self._frame_count = 0
-        self._frames_actually_processed = 0
-        self._total_crossings_detected = 0
-        self._total_events_emitted = 0
-        self._total_events_suppressed_burst = 0
-        self._total_events_suppressed_grace = 0
-        self._total_events_suppressed_zone_separation = 0
-        self._frames_skipped = 0
-        self._total_hand_observations = 0   # diagnostic: are hands even
-                                              # being detected at all?
 
     # --------------------------------------------------------
     def _in_grace_window(self, now: float) -> bool:
@@ -280,39 +353,40 @@ class ObjectPassingModule:
         return best_zone
 
     # --------------------------------------------------------
-    def process_frame(self, frame: np.ndarray, frame_number: int) -> List[DetectionEvent]:
+    def _process_frame(self, frame: np.ndarray, frame_number: int):
         """
-        1. Run YOLO to get object boxes (paper/pen/phone placeholder)
-        2. Run MediaPipe Hands to get wrist positions
-        3. For each hand, determine its current zone + whether an
+        1. Initialise zone tracker on first frame (matches phone/gaze/
+           posture pattern — see main.py's candidate-ID-consistency note)
+        2. Run YOLO to get object boxes (paper/pen/phone placeholder)
+        3. Run MediaPipe Hands to get wrist positions
+        4. For each hand, determine its current zone + whether an
            object is near the wrist ("holding")
-        4. Compare to that hand's last-seen zone — if changed AND the
-           new/old zones are adjacent AND the hand is near the shared
-           boundary strip → record a CrossingEvent
-        5. Feed every crossing into the burst tracker regardless of
+        5. Compare to that hand's last-seen zone via nearest-neighbour
+           matching — if changed AND the new/old zones are adjacent
+           → record a CrossingEvent
+        6. Feed every crossing into the burst tracker regardless of
            holding_object (needed so burst detection has visibility
            into the full crossing pattern, not just the ones that
            would otherwise score)
-        6. Only crossings where holding_object=True are candidates for
-           a scored DetectionEvent — an empty hand crossing zones
-           (e.g. reaching for their own item at zone edge, adjusting
-           posture) is not evidence of anything
-        7. Apply grace window + burst suppression before emitting
+        7. Only crossings where holding_object=True are candidates for
+           a scored DetectionEvent — an empty hand crossing zones is
+           not evidence of anything
+        8. Apply zone-separation, grace-window, and burst suppression,
+           then push directly to the shared alert_queue (matches the
+           other three modules — no return value)
         """
-        self._frame_count += 1
+        self._init_zone_tracker_if_needed(frame)
         now = time.time()
 
         # Frame skip — this module runs BOTH YOLO and MediaPipe Hands per
         # processed frame, making it the heaviest of the four modules on
-        # CPU. Skip early, before either model runs, rather than after —
-        # running one model and discarding the result wastes the exact
-        # cost we're trying to avoid.
-        if self._frame_count % self._frame_skip != 0:
+        # CPU. Skip early, before either model runs.
+        if self.frames_processed % self._frame_skip != 0:
             self._frames_skipped += 1
-            return []
+            return
 
         self._frames_actually_processed += 1
-        events: List[DetectionEvent] = []
+        self._last_frame_events = []  # reset — isolation-test display only
 
         object_boxes = self._detect_objects(frame)
         hand_positions = self._detect_hands(frame)
@@ -333,18 +407,9 @@ class ObjectPassingModule:
             # A crossing is proven by: zone changed + the two zones are
             # adjacent + the movement was within max_hand_movement_px
             # (already enforced by _find_matching_last_hand's distance
-            # cap). That's sufficient evidence on its own.
-            #
-            # An earlier version ALSO required the hand's CURRENT position
-            # to be within boundary_margin_pixels of a grid line — this
-            # was too strict once frame_skip was in play: by the time a
-            # frame is actually sampled, the hand may have already moved
-            # well past that narrow strip into the new zone, even though
-            # a genuine crossing just happened. That extra check was
-            # silently discarding valid crossings (observed ~10/50 hand
-            # observations registering a crossing on deliberate movement
-            # -- lower than expected). Removed as redundant with the
-            # conditions above.
+            # cap). See git history for why the earlier extra
+            # "current position near boundary line" check was removed —
+            # it was silently discarding valid crossings under frame_skip.
             if (last_zone is not None and last_zone != zone_id and
                     self._get_adjacent_zone_pairs_boundary(last_zone, zone_id)):
 
@@ -358,10 +423,14 @@ class ObjectPassingModule:
                 if holding_object:
                     event = self._build_event(crossing, frame_number, now)
                     if event is not None:
-                        events.append(event)
+                        try:
+                            self.alert_queue.put_nowait(event)
+                        except queue.Full:
+                            logger.warning("[ObjectPassing] Alert queue full — event dropped")
+                        self.detections_total += 1
+                        self._last_frame_events.append(event)
 
         self._last_hand_positions = current_hand_positions
-        return events
 
     # --------------------------------------------------------
     def _build_event(self, crossing: CrossingEvent, frame_number: int,
@@ -449,8 +518,16 @@ class ObjectPassingModule:
 
     # --------------------------------------------------------
     def get_stats(self) -> dict:
+        """Matches phone_detection.py / gaze_detection.py / posture_analysis.py's
+        get_stats() shape (frames_processed, fps, queue_size), plus this
+        module's own additional diagnostic counters."""
+        elapsed = time.time() - self._start_time if self._start_time else 0
+        fps = self.frames_processed / elapsed if elapsed > 0 else 0
         return {
-            'total_frames_seen': self._frame_count,
+            'frames_processed': self.frames_processed,
+            'detections_total': self.detections_total,
+            'fps': round(fps, 2),
+            'queue_size': self.frame_queue.qsize(),
             'frames_actually_processed': self._frames_actually_processed,
             'frames_skipped': self._frames_skipped,
             'total_hand_observations': self._total_hand_observations,
@@ -463,10 +540,23 @@ class ObjectPassingModule:
             'in_grace_window': self._in_grace_window(time.time()),
         }
 
+    def get_last_frame_events(self) -> List[DetectionEvent]:
+        """
+        Isolation-test convenience only — events are pushed directly to
+        alert_queue during normal operation (matching the other three
+        modules), but the isolation test script also wants to draw
+        boxes for whatever fired on the most recently processed frame
+        without needing to separately drain the queue itself.
+        """
+        return self._last_frame_events
+
     def draw_detections(self, frame: np.ndarray,
                          events: List[DetectionEvent]) -> np.ndarray:
         """Isolation-test visualisation — draws grid + flagged zones."""
         out = frame.copy()
+        if self._zone_tracker is None:
+            return out  # not yet initialised (no frame processed yet)
+
         cell_w = int(self._zone_tracker.cell_w)
         cell_h = int(self._zone_tracker.cell_h)
 
