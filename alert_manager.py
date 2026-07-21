@@ -102,6 +102,21 @@ class AlertManager:
         self._yellow_threshold = scoring_cfg['yellow_threshold']
         self._red_threshold = scoring_cfg['red_threshold']
 
+        # High-confidence phone override: a candidate confidently and
+        # visibly holding a phone in the open is judged a strong enough
+        # signal on its own to warrant an immediate red alert, without
+        # waiting for repeated detections or a corroborating signal from
+        # another module. Rationale: phone possession is already treated
+        # as an unambiguous violation (Section 3.7.3) with no persistence
+        # requirement; this extends that reasoning to scoring, since a
+        # student risking open phone use in front of a working camera is
+        # a rarer and more deliberate act than a brief, low-confidence
+        # glimpse of a phone-like object.
+        phone_cfg = config.get('phone_detection', {})
+        self._phone_high_conf_threshold = phone_cfg.get(
+            'high_confidence_auto_alert_threshold', 0.70
+        )
+
         self._red_cooldown = alerts_cfg['red_cooldown_seconds']
         self._yellow_cooldown = alerts_cfg['yellow_cooldown_seconds']
 
@@ -249,6 +264,20 @@ class AlertManager:
                      else 1.0)
             contribution = event.weighted_score * duration_mult * bonus
 
+            # 3b. High-confidence phone override (see __init__ for
+            # rationale) — guarantees THIS SINGLE event alone is enough
+            # to push the candidate's score to at least red_threshold,
+            # regardless of duration multiplier, combination bonus, or
+            # decayed score history. Does not replace the normal
+            # formula above — only raises the floor when triggered.
+            phone_override_applied = False
+            if (event.module == "phone_detection" and
+                    event.confidence >= self._phone_high_conf_threshold):
+                floor_needed = self._red_threshold - state.score
+                if floor_needed > contribution:
+                    contribution = floor_needed
+                    phone_override_applied = True
+
             # 4. Update score + event log
             state.score += contribution
             state.recent_events.append((now, event.module))
@@ -271,6 +300,7 @@ class AlertManager:
                 'module': event.module,
                 'contribution': contribution,
                 'combination_bonus_applied': bonus > 1.0,
+                'phone_high_confidence_override': phone_override_applied,
                 'score_after': state.score,
                 'alert_level': alert_level,
                 'alert_dispatched': alert_dispatched,

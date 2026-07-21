@@ -42,6 +42,14 @@ phone_detection:
   # Phone detection = immediate alert, NO persistence counter (Section 3.7.3)
   requires_persistence: false
 
+  # High-confidence auto-alert override (applied in alert_manager.py, not
+  # here — this module has no scoring logic, per Section 3.10). A single
+  # phone detection at or above this confidence is treated as strong
+  # enough evidence on its own to force an immediate red alert for that
+  # candidate, rather than requiring repeated detections or a
+  # corroborating signal from another module.
+  high_confidence_auto_alert_threshold: 0.70
+
 # --- Gaze / Head Detection Module (Section 3.6) ---
 gaze_detection:
   # Head orientation thresholds (Chapter 3 Table 3.3)

@@ -73,7 +73,11 @@ def test_basic_scoring(config, results: TestResults):
     print("\n--- Test 1: Basic scoring (single event, under 3s duration) ---")
     am = fresh_manager(config, "database/test_alert_manager_1.db")
 
-    event = make_event("phone_detection", "R2C3", base_score=35,
+    # Uses gaze_detection rather than phone_detection deliberately -- this
+    # test checks the generic duration/bonus formula in isolation, and
+    # phone_detection events now carry a high-confidence auto-alert
+    # override (Test 11) that would otherwise interfere here.
+    event = make_event("gaze_detection", "R2C3", base_score=35,
                         weighted_score=35, duration_seconds=0.0)
     result = am.process_event(event)
 
@@ -173,8 +177,10 @@ def test_alert_thresholds(config, results: TestResults):
     am = fresh_manager(config, "database/test_alert_manager_6.db")
     now = time.time()
 
-    # Push score up gradually: phone (35) -> yellow at 60? not yet (35).
-    r1 = am.process_event(make_event("phone_detection", "R1C1", base_score=35,
+    # Push score up gradually using non-phone modules -- phone_detection
+    # events now carry a high-confidence auto-alert override (Test 11)
+    # that would short-circuit this gradual-climb scenario.
+    r1 = am.process_event(make_event("posture_analysis", "R1C1", base_score=35,
                                       weighted_score=35, timestamp=now))
     results.check("Score 35: no alert", r1['alert_level'] == "none")
 
@@ -295,6 +301,37 @@ def cleanup_test_dbs():
             pass
 
 
+def test_phone_high_confidence_override(config, results: TestResults):
+    print("\n--- Test 11: High-confidence phone detection forces immediate red alert ---")
+    am = fresh_manager(config, "database/test_alert_manager_11.db")
+
+    # A single phone event at 0.85 confidence, low base weighted_score,
+    # no duration, no combination bonus -- would normally contribute far
+    # less than red_threshold (75) on its own.
+    event = make_event("phone_detection", "R1C1", base_score=35,
+                        weighted_score=35, duration_seconds=0, confidence=0.85)
+    result = am.process_event(event)
+
+    results.check("High-confidence override applied",
+                   result['phone_high_confidence_override'] is True)
+    results.check(f"Score forced to >= red_threshold (75) on a single event",
+                   result['score_after'] >= 75,
+                   f"score={result['score_after']:.1f}")
+    results.check("Alert level is red", result['alert_level'] == "red")
+    results.check("Alert dispatched immediately", result['alert_dispatched'] is True)
+
+    # Confirm a LOW-confidence phone event does NOT trigger the override
+    am2 = fresh_manager(config, "database/test_alert_manager_11b.db")
+    low_conf_event = make_event("phone_detection", "R2C2", base_score=35,
+                                 weighted_score=21, duration_seconds=0, confidence=0.60)
+    result2 = am2.process_event(low_conf_event)
+    results.check("Low-confidence phone event does NOT trigger override",
+                   result2['phone_high_confidence_override'] is False)
+    results.check("Low-confidence event alone does not reach red",
+                   result2['alert_level'] != "red",
+                   f"score={result2['score_after']:.1f}")
+
+
 def main():
     print("=" * 60)
     print("ALERT MANAGER — STANDALONE TEST (no camera required)")
@@ -314,6 +351,7 @@ def main():
     test_score_decay(config, results)
     test_incident_logging(config, results)
     test_alert_logging_and_callback(config, results)
+    test_phone_high_confidence_override(config, results)
 
     cleanup_test_dbs()
 
