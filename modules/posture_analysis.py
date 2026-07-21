@@ -181,9 +181,45 @@ class CandidatePostureState:
         return min(elapsed / self.calibration_seconds, 1.0)
 
     def get_deviation_duration(self) -> float:
+        """
+        Total elapsed time since this deviation began. Used to decide
+        WHETHER a deviation has persisted long enough to alert at all
+        (checked against persistence_seconds) — NOT used for the
+        duration value reported to alert_manager, see
+        get_segment_duration() below.
+        """
         if self.deviation_start_time is None:
             return 0.0
         return time.time() - self.deviation_start_time
+
+    def get_segment_duration(self) -> float:
+        """
+        Duration value reported to alert_manager for THIS SPECIFIC alert.
+
+        Uses time since the LAST alert (if this deviation has already
+        alerted before), not time since the deviation began. Without
+        this distinction, a single ongoing deviation that keeps
+        re-alerting every alert_cooldown seconds would report an
+        ever-growing cumulative duration (8s, 16s, 24s, 32s...) on every
+        repeat — and since alert_manager's duration multiplier maxes out
+        at ×3.0 for anything over 10s, every repeat past the first would
+        be scored as a fresh maximum-duration incident indefinitely,
+        even though each repeat really only represents ~alert_cooldown
+        seconds of additional sustained behaviour. This caused runaway
+        score growth in live integrated testing (main.py) — a candidate
+        who deviated once and stayed deviating (or whose deviation was
+        still being processed from a backlogged frame queue well after
+        they'd already stopped) accumulated an escalating score with no
+        ceiling, reaching 200+ in one observed run.
+
+        This method makes each repeat alert report a roughly constant,
+        bounded duration (~alert_cooldown) instead, so repeat alerts on
+        one ongoing deviation land in a stable multiplier tier rather
+        than compounding forever.
+        """
+        if self.last_alert_time is None:
+            return self.get_deviation_duration()
+        return time.time() - self.last_alert_time
 
     def can_alert(self) -> bool:
         if self.last_alert_time is None:
@@ -522,6 +558,11 @@ class PostureAnalysisModule:
                 base_score = (self._base_sustained if is_sustained
                               else self._base_brief)
 
+                # Computed BEFORE record_alert() below updates
+                # last_alert_time — see get_segment_duration() docstring
+                # for why this must NOT be the cumulative duration.
+                reported_duration = state.get_segment_duration()
+
                 event = DetectionEvent(
                     module="posture_analysis",
                     candidate_id=candidate_id,
@@ -533,7 +574,7 @@ class PostureAnalysisModule:
                     frame_number=frame_number,
                     timestamp=time.time(),
                     camera_id=self.camera_id,
-                    duration_seconds=duration,
+                    duration_seconds=reported_duration,
                     requires_persistence=True
                 )
 

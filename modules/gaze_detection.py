@@ -143,10 +143,30 @@ class CandidateGazeState:
             self.baseline_pitch = fallback_pitch
 
     def get_deviation_duration(self) -> float:
-        """Returns how long current deviation has been ongoing."""
+        """Returns how long current deviation has been ongoing. Used to
+        decide WHETHER to alert at all (checked against
+        persistence_seconds) — NOT used as the duration value reported
+        to alert_manager, see get_segment_duration() below."""
         if self.deviation_start_time is None:
             return 0.0
         return time.time() - self.deviation_start_time
+
+    def get_segment_duration(self) -> float:
+        """
+        Duration value reported to alert_manager for THIS SPECIFIC alert.
+        Uses time since the LAST alert rather than time since the
+        deviation began — see the identical method + full explanation
+        in posture_analysis.py's CandidatePostureState, which this
+        mirrors exactly. Without this, an ongoing deviation re-alerting
+        every alert_cooldown seconds would report an ever-growing
+        cumulative duration and get scored at alert_manager's maximum
+        duration multiplier (×3.0, for anything over 10s) on every
+        single repeat indefinitely, causing runaway score growth —
+        confirmed in live integrated testing via main.py.
+        """
+        if self.last_alert_time is None:
+            return self.get_deviation_duration()
+        return time.time() - self.last_alert_time
 
     def can_alert(self) -> bool:
         """Check if enough time has passed since last alert."""
@@ -514,6 +534,10 @@ class GazeDetectionModule:
 
                     behaviour_type = self._get_behaviour_type(deviation_type)
 
+                    # Computed BEFORE record_alert() below updates
+                    # last_alert_time — see get_segment_duration() docstring.
+                    reported_duration = state.get_segment_duration()
+
                     event = DetectionEvent(
                         module="gaze_detection",
                         candidate_id=candidate_id,
@@ -525,7 +549,7 @@ class GazeDetectionModule:
                         frame_number=frame_number,
                         timestamp=time.time(),
                         camera_id=self.camera_id,
-                        duration_seconds=duration,
+                        duration_seconds=reported_duration,
                         requires_persistence=True
                     )
 
