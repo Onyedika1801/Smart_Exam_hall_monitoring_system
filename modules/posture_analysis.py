@@ -352,6 +352,12 @@ class PostureAnalysisModule:
         self._persistence_secs    = posture_cfg['persistence_seconds']         # 3.0
         self._base_sustained      = posture_cfg['base_score_sustained']        # 10 pts
         self._base_brief          = posture_cfg['base_score_brief']            # 5 pts
+        # See identical frame_skip note in phone_detection.py __init__ —
+        # same root cause: no skip logic existed here before live
+        # integrated testing showed this module capped near 4 fps under
+        # full four-module CPU load. Defaults to 1 (no skip) if absent
+        # from an older config.yaml.
+        self._frame_skip          = posture_cfg.get('frame_skip', 1)
 
         # Each module has its OWN frame queue (Section 3.13)
         max_q = config['queues']['max_size']
@@ -468,6 +474,14 @@ class PostureAnalysisModule:
         5. Raise DetectionEvent if deviation persists beyond threshold
         """
         if self._pose is None:
+            return
+
+        # Skip early, before running MediaPipe Pose. Safe to do here
+        # because calibration and persistence-duration tracking are both
+        # wall-clock based (time.time()), not frame-count based — skipping
+        # frames means fewer samples during calibration and slightly
+        # coarser detection timing, not broken timing.
+        if self.frames_processed % self._frame_skip != 0:
             return
 
         h, w = frame.shape[:2]

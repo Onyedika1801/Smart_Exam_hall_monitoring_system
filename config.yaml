@@ -24,6 +24,12 @@ phone_detection:
   model_path: "models/phone_detector_best.pt"
   confidence_threshold: 0.55     # Min confidence to consider a detection
   inference_image_size: 320     # Reduced from 640 for faster CPU inference
+  frame_skip: 4                  # Process 1 in every N frames. Added after
+                                  # live integrated testing (main.py) showed
+                                  # this module's queue permanently backlogged
+                                  # (~1.8 fps) under full four-module CPU load
+                                  # -- this config key did not exist before,
+                                  # the module ran with no skip at all.
   base_score: 35                 # Chapter 3 Table 3.5 — unambiguous violation
 
   # Confidence weighting (Chapter 3 Table 3.7)
@@ -67,6 +73,12 @@ posture_analysis:
   persistence_seconds: 3.0
   base_score_sustained: 10        # Chapter 3 Table 3.5
   base_score_brief: 5
+  frame_skip: 2                   # Process 1 in every N frames. Added after
+                                   # live integrated testing showed this
+                                   # module capped near 4 fps under full
+                                   # four-module CPU load. Lower than phone's
+                                   # skip since MediaPipe Pose is already
+                                   # noticeably cheaper per-frame than YOLO.
 
 # --- Object Passing Module (Section 3.8) ---
 # See modules/object_passing.py docstring for full design rationale and

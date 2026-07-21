@@ -141,6 +141,7 @@ class PhoneDetectionModule:
 
         # Stats
         self.frames_processed = 0
+        self._frames_actually_processed = 0
         self.detections_total = 0
         self._start_time = None
 
@@ -150,6 +151,18 @@ class PhoneDetectionModule:
         # Candidate zone tracker
         ph_cfg = config['phone_detection']
         self._conf_threshold = ph_cfg['confidence_threshold']
+        # NOTE: frame_skip did not exist in this module until live
+        # integrated testing (main.py) showed phone_detection's queue
+        # permanently backlogged (25-30/30 for almost an entire ~9 minute
+        # run) while running under full four-module CPU load, with fps
+        # stuck around 1.8 -- far below the camera's actual frame rate.
+        # A frame_skip value HAD been tuned earlier, but only inside the
+        # standalone isolation test script (test_phone_detection.py),
+        # never in this actual module class, so main.py was running
+        # YOLO on every single frame with no skip at all. Defaults to 1
+        # (no skip) if not present in an older config.yaml, to avoid
+        # breaking anything relying on the previous unconditional behaviour.
+        self._frame_skip = ph_cfg.get('frame_skip', 1)
         self._base_score = ph_cfg['base_score']
         self._model_path = ph_cfg['model_path']
         self._imgsz = ph_cfg['inference_image_size']
@@ -240,6 +253,12 @@ class PhoneDetectionModule:
         """
         if self._model is None:
             return
+
+        # Skip early, before running YOLO — see frame_skip comment in
+        # __init__ for why this exists now.
+        if self.frames_processed % self._frame_skip != 0:
+            return
+        self._frames_actually_processed += 1
 
         h, w = frame.shape[:2]
 
