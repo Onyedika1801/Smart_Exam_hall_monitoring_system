@@ -163,6 +163,23 @@ class PhoneDetectionModule:
         # (no skip) if not present in an older config.yaml, to avoid
         # breaking anything relying on the previous unconditional behaviour.
         self._frame_skip = ph_cfg.get('frame_skip', 1)
+
+        # Per-candidate re-alert cooldown. Confirmed via live testing
+        # (candidate score reaching 1616+ within seconds) that this
+        # module previously emitted a brand-new DetectionEvent on EVERY
+        # processed frame containing a qualifying phone, with no
+        # throttling at all -- unlike gaze_detection (5s cooldown) and
+        # posture_analysis (8s cooldown), which both already limit how
+        # often an ongoing deviation re-fires. A continuously visible
+        # phone at ~3-4 processed frames/second, each worth up to ~40+
+        # points, explains runaway scores reaching the thousands within
+        # seconds. This does NOT reintroduce a persistence delay before
+        # the FIRST alert (Section 3.7.3: a single qualifying frame is
+        # still sufficient to alert) -- it only throttles REPEAT events
+        # for a candidate who remains flagged across many consecutive
+        # processed frames.
+        self._re_alert_cooldown = ph_cfg.get('re_alert_cooldown_seconds', 5.0)
+        self._last_event_time: dict = {}
         self._base_score = ph_cfg['base_score']
         self._model_path = ph_cfg['model_path']
         self._imgsz = ph_cfg['inference_image_size']
@@ -293,6 +310,17 @@ class PhoneDetectionModule:
                 # Assign candidate ID from grid position
                 candidate_id = self._zone_tracker.get_candidate_id(x_centre, y_centre)
 
+                # Per-candidate re-alert cooldown -- see __init__ note.
+                # A single qualifying detection is still sufficient to
+                # alert immediately (no persistence delay), but repeat
+                # detections of the SAME candidate within the cooldown
+                # window are skipped entirely rather than each creating
+                # a fresh, fully-scored event.
+                now = time.time()
+                last_time = self._last_event_time.get(candidate_id)
+                if last_time is not None and (now - last_time) < self._re_alert_cooldown:
+                    continue
+
                 # Apply confidence weight (Table 3.7)
                 conf_weight = calculate_confidence_weight(confidence, self.config)
                 if conf_weight == 0.0:
@@ -310,11 +338,12 @@ class PhoneDetectionModule:
                     weighted_score=weighted_score,
                     bbox=(int(x1), int(y1), int(x2), int(y2)),
                     frame_number=frame_number,
-                    timestamp=time.time(),
+                    timestamp=now,
                     camera_id=self.camera_id,
                     duration_seconds=0.0,
                     requires_persistence=False  # Phone = immediate alert (Section 3.7.3)
                 )
+                self._last_event_time[candidate_id] = now
 
                 # Push to shared alert queue for alert_manager
                 try:

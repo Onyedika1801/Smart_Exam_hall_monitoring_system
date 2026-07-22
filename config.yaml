@@ -50,6 +50,15 @@ phone_detection:
   # corroborating signal from another module.
   high_confidence_auto_alert_threshold: 0.70
 
+  # Throttles repeat events for the SAME candidate remaining visible
+  # across many consecutive processed frames. Without this, a
+  # continuously held phone generated a fresh, fully-scored event on
+  # every processed frame (confirmed via live testing: candidate score
+  # reaching 1600+ within seconds). Mirrors gaze_detection's 5s and
+  # posture_analysis's 8s repeat-alert cooldowns. Does NOT delay the
+  # first alert for a newly detected phone.
+  re_alert_cooldown_seconds: 5.0
+
 # --- Gaze / Head Detection Module (Section 3.6) ---
 gaze_detection:
   # Head orientation thresholds (Chapter 3 Table 3.3)
