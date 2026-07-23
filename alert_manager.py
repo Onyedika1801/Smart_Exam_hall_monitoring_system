@@ -101,6 +101,7 @@ class AlertManager:
         self._decay_percent_per_10s = scoring_cfg['decay_percent_per_10s']
         self._yellow_threshold = scoring_cfg['yellow_threshold']
         self._red_threshold = scoring_cfg['red_threshold']
+        self._max_score = scoring_cfg.get('max_score', 200)
 
         # High-confidence phone override: a candidate confidently and
         # visibly holding a phone in the open is judged a strong enough
@@ -280,6 +281,7 @@ class AlertManager:
 
             # 4. Update score + event log
             state.score += contribution
+            state.score = min(state.score, self._max_score)
             state.recent_events.append((now, event.module))
             state.last_updated = now
 

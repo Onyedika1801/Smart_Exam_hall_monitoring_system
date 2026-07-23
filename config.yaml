@@ -186,6 +186,7 @@ scoring:
   # Alert thresholds (Chapter 3 Table 3.8)
   yellow_threshold: 60
   red_threshold: 75
+  max_score: 200
 
 # --- Alert Cooldowns (Section 3.11) ---
 alerts:
