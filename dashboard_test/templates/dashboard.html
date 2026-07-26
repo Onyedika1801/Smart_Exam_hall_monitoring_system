@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Exam Hall Monitor — Dashboard (Test)</title>
+    <style>
+        body {
+            background: #14161a;
+            color: #e6e6e6;
+            font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+            margin: 0;
+            padding: 24px;
+        }
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        p.subtitle {
+            color: #9a9a9a;
+            font-size: 14px;
+            margin-top: 0;
+            margin-bottom: 24px;
+        }
+        .video-container {
+            border: 1px solid #2a2d33;
+            border-radius: 8px;
+            overflow: hidden;
+            max-width: 720px;
+            background: #000;
+        }
+        .video-container img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        .status {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #6bd47a;
+        }
+    </style>
+</head>
+<body>
+    <h1>Exam Hall Monitor</h1>
+    <p class="subtitle">Step 1 test — live video feed only, no alerts or scoring wired in yet</p>
+
+    <div class="video-container">
+        <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
+    </div>
+
+    <p class="status">● Live feed active</p>
+</body>
+</html>
