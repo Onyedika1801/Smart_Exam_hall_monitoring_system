@@ -7,8 +7,15 @@
 # --- Camera Settings ---
 camera:
   device_index: 0          # 0 = first USB camera. Change to 1, 2 etc for other cameras
-  width: 640
-  height: 480
+  width: 1920               # Updated from 640 -- the original development
+  height: 1080              # webcam was hardware-limited to 640x480
+                             # regardless of requested resolution (confirmed
+                             # via direct probing, Section 4.7); the new
+                             # 1080p camera supports this natively. If
+                             # main.py logs a lower actual resolution than
+                             # requested, OpenCV/the camera has fallen back
+                             # -- check cv2.CAP_PROP_FRAME_WIDTH/HEIGHT
+                             # after opening to confirm what was granted.
   fps: 30
   input_type: "live"       # "live" for webcam, "video" for test file
   test_video_path: "test_videos/test.mp4"  # used only when input_type = "video"
@@ -23,13 +30,24 @@ queues:
 phone_detection:
   model_path: "models/phone_detector_best.pt"
   confidence_threshold: 0.55     # Min confidence to consider a detection
-  inference_image_size: 320     # Reduced from 640 for faster CPU inference
-  frame_skip: 4                  # Process 1 in every N frames. Added after
-                                  # live integrated testing (main.py) showed
-                                  # this module's queue permanently backlogged
-                                  # (~1.8 fps) under full four-module CPU load
-                                  # -- this config key did not exist before,
-                                  # the module ran with no skip at all.
+  inference_image_size: 640     # Restored to native training resolution now
+                                  # that GPU inference is available. Was
+                                  # reduced to 320 specifically to cope with
+                                  # CPU-only inference (Section 4.3.1); the
+                                  # smaller size was a known contributor to
+                                  # weaker detection of small/distant phones.
+                                  # Re-tune downward again if GPU throughput
+                                  # under full four-module load doesn't
+                                  # support full resolution in practice.
+  frame_skip: 2                  # Reduced from 4 now that GPU inference is
+                                  # available for this module. This is a
+                                  # conservative STARTING POINT, not a
+                                  # benchmarked value -- re-run
+                                  # test_phone_detection.py and main.py on
+                                  # the new hardware and adjust based on
+                                  # actual observed FPS/queue backlog,
+                                  # the same way the original CPU values
+                                  # were tuned (Section 4.7).
   base_score: 35                 # Chapter 3 Table 3.5 — unambiguous violation
 
   # Confidence weighting (Chapter 3 Table 3.7)
@@ -106,16 +124,18 @@ object_passing:
                                                    # paper/pen dataset is
                                                    # trained (see limitations)
   object_confidence_threshold: 0.35
-  frame_skip: 3                   # Process 1 in every N frames — this
-                                   # module runs BOTH YOLO and MediaPipe
-                                   # Hands per processed frame, making it
-                                   # the heaviest of the four on CPU.
-                                   # Raised processing rate from 1-in-6 to
-                                   # 1-in-3 (roughly 2x load) to give the
-                                   # nearest-neighbour hand-matching less
-                                   # distance to cover between sampled
-                                   # frames. If FPS/heat becomes unusable
-                                   # again, step back toward 6.
+  frame_skip: 2                   # Reduced from 3 now that GPU inference
+                                   # is available for the YOLO half of this
+                                   # module's per-frame cost. MediaPipe
+                                   # Hands (the other half) still runs on
+                                   # CPU regardless (see _load_models() in
+                                   # object_passing.py), so this module
+                                   # remains the heaviest of the four even
+                                   # on GPU hardware. This is a STARTING
+                                   # POINT -- re-run test_object_passing.py
+                                   # and main.py on the new hardware and
+                                   # re-tune based on actual observed
+                                   # FPS/heat/queue backlog.
   zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
   transfer_time_window_seconds: 1.5
   min_zone_separation: 0.15       # Min fraction of frame width between zones

@@ -252,11 +252,30 @@ class PhoneDetectionModule:
             self.frames_processed += 1
 
     def _load_model(self):
-        """Load YOLOv8n model. Called once when thread starts."""
+        """Load YOLOv8n model. Called once when thread starts.
+
+        Explicitly detects and requests GPU (CUDA) if available, rather
+        than relying on library-default device selection, so the chosen
+        device is visible in the log and reproducible across machines.
+        Falls back to CPU automatically if no GPU is present -- this
+        module still runs correctly on CPU-only hardware (e.g. a
+        marker's machine at defence), just slower, matching the original
+        CPU-only design baseline documented in Chapter 3/4.
+        """
         try:
+            import torch
             from ultralytics import YOLO
             logger.info(f"[PhoneDetection] Loading model: {self._model_path}")
             self._model = YOLO(self._model_path)
+
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0)
+                self._model.to('cuda')
+                logger.info(f"[PhoneDetection] GPU detected ({device_name}) -- "
+                            f"running inference on CUDA")
+            else:
+                logger.info("[PhoneDetection] No GPU detected -- running on CPU")
+
             logger.info("[PhoneDetection] Model loaded successfully")
         except Exception as e:
             logger.error(f"[PhoneDetection] Failed to load model: {e}")

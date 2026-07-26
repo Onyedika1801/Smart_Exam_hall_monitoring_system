@@ -280,10 +280,28 @@ class ObjectPassingModule:
             self.frames_processed += 1
 
     def _load_models(self):
-        """Load YOLO + MediaPipe Hands. Called once when thread starts."""
+        """Load YOLO + MediaPipe Hands. Called once when thread starts.
+
+        Only the YOLO object detector is moved to GPU when available.
+        MediaPipe Hands has no straightforward cross-platform GPU
+        acceleration path in this setup and continues to run on CPU
+        regardless -- this module remains the heaviest of the four
+        (Section 3.13) even on GPU hardware, since it runs two models
+        per processed frame and only one of them benefits here.
+        """
         try:
+            import torch
             logger.info(f"[ObjectPassing] Loading model: {self._model_path}")
             self._model = YOLO(self._model_path)
+
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0)
+                self._model.to('cuda')
+                logger.info(f"[ObjectPassing] GPU detected ({device_name}) -- "
+                            f"YOLO running on CUDA (MediaPipe Hands remains on CPU)")
+            else:
+                logger.info("[ObjectPassing] No GPU detected -- running on CPU")
+
             self._hands = mp.solutions.hands.Hands(
                 static_image_mode=False,
                 max_num_hands=8,
