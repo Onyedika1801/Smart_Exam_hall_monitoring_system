@@ -32,7 +32,11 @@ def camera_loop():
     """Continuously read frames from the webcam in a background thread."""
     global _latest_frame
 
-    cap = cv2.VideoCapture(_camera_source)
+    # On Windows, the default MSMF backend can fail to grab frames from some
+    # external/USB webcams (works for opening the device, then fails on read).
+    # DirectShow (CAP_DSHOW) tends to be more reliable for these. This flag is
+    # ignored harmlessly on non-Windows platforms.
+    cap = cv2.VideoCapture(_camera_source, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print(f"[ERROR] Could not open camera source {_camera_source}")
         return
