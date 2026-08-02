@@ -39,16 +39,187 @@
             font-size: 13px;
             color: #6bd47a;
         }
+        .layout {
+            display: flex;
+            gap: 32px;
+            margin-top: 24px;
+        }
+        .left-col {
+            flex: 1;
+            min-width: 0;
+        }
+        .right-col {
+            width: 380px;
+            flex-shrink: 0;
+        }
+        h2 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-top: 28px;
+            margin-bottom: 10px;
+            color: #cfcfcf;
+        }
+        .seat-map {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+            max-width: 320px;
+        }
+        .seat {
+            aspect-ratio: 1;
+            background: #2a2d33;
+            border-radius: 4px;
+            transition: background 0.3s ease;
+        }
+        .seat.flash {
+            box-shadow: 0 0 0 2px #fff3;
+        }
+        .score-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .score-label {
+            width: 60px;
+            color: #b0b0b0;
+        }
+        .score-track {
+            flex: 1;
+            height: 10px;
+            background: #2a2d33;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .score-fill {
+            height: 100%;
+            width: 0%;
+            background: #3d3f45;
+            transition: width 0.3s ease, background 0.3s ease;
+        }
+        .score-value {
+            width: 28px;
+            text-align: right;
+            color: #d0d0d0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #23262b;
+        }
+        th {
+            color: #8a8a8a;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
     <h1>Exam Hall Monitor</h1>
-    <p class="subtitle">Step 1 test — live video feed only, no alerts or scoring wired in yet</p>
+    <p class="subtitle">Step 2 test — video feed + fake SSE alerts (alert log, score bar, seat map)</p>
 
-    <div class="video-container">
-        <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
+    <div class="layout">
+        <div class="left-col">
+            <div class="video-container">
+                <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
+            </div>
+            <p class="status">● Live feed active</p>
+
+            <h2>Seat Map</h2>
+            <div id="seat-map" class="seat-map"></div>
+
+            <h2>Candidate Scores</h2>
+            <div id="score-bars"></div>
+        </div>
+
+        <div class="right-col">
+            <h2>Alert Log</h2>
+            <table id="alert-log">
+                <thead>
+                    <tr><th>Time</th><th>Candidate</th><th>Behaviour</th><th>Score</th><th>Camera</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
     </div>
 
-    <p class="status">● Live feed active</p>
+    <script>
+        const GRID_COLS = 5;
+        const GRID_ROWS = 4;
+
+        // Build the seat map grid once on load
+        const seatMap = document.getElementById("seat-map");
+        for (let r = 1; r <= GRID_ROWS; r++) {
+            for (let c = 1; c <= GRID_COLS; c++) {
+                const cell = document.createElement("div");
+                cell.className = "seat";
+                cell.id = `seat-R${r}C${c}`;
+                cell.textContent = "";  // no coordinates shown, per spec
+                seatMap.appendChild(cell);
+            }
+        }
+
+        const scoreBars = {};  // candidate_id -> DOM element
+
+        function ensureScoreBar(candidateId) {
+            if (scoreBars[candidateId]) return scoreBars[candidateId];
+
+            const wrapper = document.createElement("div");
+            wrapper.className = "score-row";
+            wrapper.innerHTML = `
+                <span class="score-label">${candidateId}</span>
+                <div class="score-track"><div class="score-fill"></div></div>
+                <span class="score-value">0</span>
+            `;
+            document.getElementById("score-bars").appendChild(wrapper);
+            scoreBars[candidateId] = wrapper;
+            return wrapper;
+        }
+
+        function levelColor(level) {
+            if (level === "red") return "#e5484d";
+            if (level === "yellow") return "#e5c73d";
+            return "#3d3f45";
+        }
+
+        const source = new EventSource("/alerts");
+        source.onmessage = function (e) {
+            const data = JSON.parse(e.data);
+
+            // 1. Alert log row
+            const tbody = document.querySelector("#alert-log tbody");
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td>${data.timestamp}</td>
+                <td>${data.candidate_id}</td>
+                <td>${data.behaviour}</td>
+                <td>${data.score}</td>
+                <td>${data.camera_id}</td>
+            `;
+            tbody.prepend(row);
+
+            // 2. Score bar
+            const bar = ensureScoreBar(data.candidate_id);
+            const fill = bar.querySelector(".score-fill");
+            const value = bar.querySelector(".score-value");
+            fill.style.width = Math.min(data.score, 100) + "%";
+            fill.style.background = levelColor(data.level);
+            value.textContent = data.score;
+
+            // 3. Seat map highlight
+            const seatId = `seat-${data.candidate_id}`;
+            const seat = document.getElementById(seatId);
+            if (seat) {
+                seat.style.background = levelColor(data.level);
+                seat.classList.add("flash");
+                setTimeout(() => seat.classList.remove("flash"), 1500);
+            }
+        };
+    </script>
 </body>
 </html>

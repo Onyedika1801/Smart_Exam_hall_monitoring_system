@@ -11,6 +11,9 @@ Then open http://localhost:5000 in a browser.
 """
 
 import argparse
+import json
+import queue
+import random
 import threading
 import time
 
@@ -26,6 +29,42 @@ _frame_lock = threading.Lock()
 _latest_frame = None
 _camera_source = 0
 _running = True
+
+# --- Fake alert generation (dummy data only, for testing the SSE pipe) ---
+# This stands in for your real alert_manager.py output. Each SSE client
+# gets its own queue so multiple browser tabs can each receive every event.
+_sse_clients = []
+_sse_clients_lock = threading.Lock()
+
+BEHAVIOUR_TYPES = ["Phone Detected", "Gaze Deviation", "Posture Deviation", "Object Passing"]
+GRID_COLS = 5
+GRID_ROWS = 4
+
+
+def fake_alert_generator():
+    """Pushes a random fake alert event every few seconds to all connected clients."""
+    while _running:
+        time.sleep(random.uniform(3, 6))
+
+        col = random.randint(1, GRID_COLS)
+        row = random.randint(1, GRID_ROWS)
+        score = random.randint(40, 95)
+        level = "red" if score >= 75 else "yellow" if score >= 60 else "none"
+
+        event = {
+            "candidate_id": f"R{row}C{col}",
+            "row": row,
+            "col": col,
+            "behaviour": random.choice(BEHAVIOUR_TYPES),
+            "score": score,
+            "level": level,
+            "camera_id": 1,
+            "timestamp": time.strftime("%H:%M:%S"),
+        }
+
+        with _sse_clients_lock:
+            for client_queue in _sse_clients:
+                client_queue.put(event)
 
 
 def camera_loop():
@@ -94,6 +133,27 @@ def video_feed():
     )
 
 
+@app.route("/alerts")
+def alerts():
+    """SSE endpoint. Each connecting browser gets its own queue and receives
+    every fake alert event as it's generated, formatted as an SSE 'data:' line."""
+
+    def stream():
+        client_queue = queue.Queue()
+        with _sse_clients_lock:
+            _sse_clients.append(client_queue)
+
+        try:
+            while True:
+                event = client_queue.get()  # blocks until next event
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            with _sse_clients_lock:
+                _sse_clients.remove(client_queue)
+
+    return Response(stream(), mimetype="text/event-stream")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -104,6 +164,9 @@ if __name__ == "__main__":
 
     cam_thread = threading.Thread(target=camera_loop, daemon=True)
     cam_thread.start()
+
+    alert_thread = threading.Thread(target=fake_alert_generator, daemon=True)
+    alert_thread.start()
 
     try:
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
