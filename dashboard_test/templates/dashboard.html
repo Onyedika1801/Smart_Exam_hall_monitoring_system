@@ -138,12 +138,19 @@
             text-align: center;
             box-shadow: 0 0 40px rgba(229,72,77,0.35);
         }
+        .modal-box.level-yellow {
+            border: 1px solid #e5c73d;
+            box-shadow: 0 0 40px rgba(229,199,61,0.3);
+        }
         .modal-title {
             font-size: 20px;
             font-weight: 700;
             color: #e5484d;
             margin-bottom: 14px;
             letter-spacing: 0.5px;
+        }
+        .modal-title.level-yellow {
+            color: #e5c73d;
         }
         .modal-candidate {
             font-size: 28px;
@@ -167,6 +174,13 @@
         }
         .modal-dismiss:hover {
             background: #c73e42;
+        }
+        .modal-dismiss.level-yellow {
+            background: #e5c73d;
+            color: #14161a;
+        }
+        .modal-dismiss.level-yellow:hover {
+            background: #cbad2e;
         }
     </style>
 </head>
@@ -199,9 +213,9 @@
         </div>
     </div>
 
-    <div id="red-alert-modal" class="modal-overlay hidden">
-        <div class="modal-box">
-            <div class="modal-title">🔴 RED ALERT</div>
+    <div id="alert-modal" class="modal-overlay hidden">
+        <div id="modal-box" class="modal-box">
+            <div id="modal-title" class="modal-title">🔴 RED ALERT</div>
             <div class="modal-body">
                 <div id="modal-candidate" class="modal-candidate"></div>
                 <div id="modal-detail" class="modal-detail"></div>
@@ -288,16 +302,32 @@
             }
         }
 
-        function showRedAlertModal(data) {
+        function showAlertModal(data) {
+            const isRed = data.level === "red";
+
+            const titleEl = document.getElementById("modal-title");
+            const boxEl = document.getElementById("modal-box");
+            const dismissEl = document.getElementById("modal-dismiss");
+
+            titleEl.textContent = isRed ? "🔴 RED ALERT" : "🟡 YELLOW ALERT";
+            titleEl.classList.toggle("level-yellow", !isRed);
+            boxEl.classList.toggle("level-yellow", !isRed);
+            dismissEl.classList.toggle("level-yellow", !isRed);
+
             document.getElementById("modal-candidate").textContent = data.candidate_id;
             document.getElementById("modal-detail").textContent =
                 `${data.behaviour} — score ${data.score} — ${data.timestamp}`;
-            document.getElementById("red-alert-modal").classList.remove("hidden");
-            playAlertBeep();
+            document.getElementById("alert-modal").classList.remove("hidden");
+
+            // Only red alerts get the audio beep — yellow is "passive
+            // awareness" (visual only), matching the original spec.
+            if (isRed) {
+                playAlertBeep();
+            }
         }
 
         document.getElementById("modal-dismiss").addEventListener("click", () => {
-            document.getElementById("red-alert-modal").classList.add("hidden");
+            document.getElementById("alert-modal").classList.add("hidden");
         });
 
         // Renders a single alert event into the log, score bar, and seat
@@ -332,11 +362,12 @@
                 }
             }
 
-            // Only pop the modal/sound for LIVE red alerts — replaying old
-            // history on page load shouldn't re-trigger alarms for events
-            // that already happened before this page load.
-            if (isLive && data.level === "red") {
-                showRedAlertModal(data);
+            // Pop the modal for LIVE red AND yellow alerts (audio only on
+            // red — see showAlertModal). Replaying old history on page
+            // load shouldn't re-trigger popups for events that already
+            // happened before this page load.
+            if (isLive && (data.level === "red" || data.level === "yellow")) {
+                showAlertModal(data);
             }
         }
 
