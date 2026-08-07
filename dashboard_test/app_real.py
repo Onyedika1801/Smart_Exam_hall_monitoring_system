@@ -44,6 +44,7 @@ _running = True
 
 _sse_clients = []
 _sse_clients_lock = threading.Lock()
+_alert_manager = None
 
 
 def load_config(path="config.yaml"):
@@ -105,6 +106,8 @@ def pipeline_loop(source, config):
     posture_module = PostureAnalysisModule(config, alert_queue)
     object_passing_module = ObjectPassingModule(config, alert_queue)
     alert_manager = AlertManager(config, alert_queue, on_alert=broadcast_alert)
+    global _alert_manager
+    _alert_manager = alert_manager
 
     for m in (phone_module, gaze_module, posture_module, object_passing_module):
         m.start()
@@ -154,6 +157,40 @@ def generate_mjpeg():
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
+
+
+@app.route("/history")
+def history():
+    """Returns recent alert history from SQLite so the dashboard's alert
+    log, score bars, and seat map can repopulate after a page refresh
+    instead of starting empty. Uses the same AlertManager instance the
+    live pipeline is already writing to."""
+    if _alert_manager is None:
+        return json.dumps([]), 200, {"Content-Type": "application/json"}
+
+    rows = _alert_manager.get_recent_alerts(limit=50)
+    events = []
+    for row in reversed(rows):  # oldest first, so front-end prepend logic matches live order
+        candidate_id = row["candidate_id"]
+        row_num, col_num = None, None
+        try:
+            r_part, c_part = candidate_id[1:].split("C")
+            row_num, col_num = int(r_part), int(c_part)
+        except (ValueError, IndexError):
+            pass
+
+        events.append({
+            "candidate_id": candidate_id,
+            "row": row_num,
+            "col": col_num,
+            "behaviour": row["behaviour_type"] or "unknown",
+            "score": round(row["score"], 1),
+            "level": row["alert_level"],
+            "camera_id": row["camera_id"] or "cam_0",
+            "timestamp": time.strftime("%H:%M:%S", time.localtime(row["timestamp"])),
+        })
+
+    return json.dumps(events), 200, {"Content-Type": "application/json"}
 
 
 @app.route("/video_feed")

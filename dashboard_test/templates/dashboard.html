@@ -117,11 +117,62 @@
             color: #8a8a8a;
             font-weight: 500;
         }
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+        .modal-overlay.hidden {
+            display: none;
+        }
+        .modal-box {
+            background: #1c1e23;
+            border: 1px solid #e5484d;
+            border-radius: 10px;
+            padding: 28px 32px;
+            min-width: 300px;
+            text-align: center;
+            box-shadow: 0 0 40px rgba(229,72,77,0.35);
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #e5484d;
+            margin-bottom: 14px;
+            letter-spacing: 0.5px;
+        }
+        .modal-candidate {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .modal-detail {
+            font-size: 14px;
+            color: #b0b0b0;
+            margin-bottom: 20px;
+        }
+        .modal-dismiss {
+            background: #e5484d;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .modal-dismiss:hover {
+            background: #c73e42;
+        }
     </style>
 </head>
 <body>
     <h1>Exam Hall Monitor</h1>
-    <p class="subtitle">Step 2 test — video feed + fake SSE alerts (alert log, score bar, seat map)</p>
+    <p class="subtitle">Live feed + real detection pipeline (alert log, score bar, seat map)</p>
 
     <div class="layout">
         <div class="left-col">
@@ -145,6 +196,17 @@
                 </thead>
                 <tbody></tbody>
             </table>
+        </div>
+    </div>
+
+    <div id="red-alert-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <div class="modal-title">🔴 RED ALERT</div>
+            <div class="modal-body">
+                <div id="modal-candidate" class="modal-candidate"></div>
+                <div id="modal-detail" class="modal-detail"></div>
+            </div>
+            <button id="modal-dismiss" class="modal-dismiss">Acknowledge</button>
         </div>
     </div>
 
@@ -187,11 +249,41 @@
             return "#3d3f45";
         }
 
-        const source = new EventSource("/alerts");
-        source.onmessage = function (e) {
-            const data = JSON.parse(e.data);
+        function playAlertBeep() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = ctx.createOscillator();
+                const gain = ctx.createGain();
+                oscillator.type = "square";
+                oscillator.frequency.value = 880;
+                gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+                oscillator.connect(gain);
+                gain.connect(ctx.destination);
+                oscillator.start();
+                oscillator.stop(ctx.currentTime + 0.4);
+            } catch (e) {
+                // Browsers block audio until the user interacts with the
+                // page at least once — not a bug. Visual modal still shows.
+            }
+        }
 
-            // 1. Alert log row
+        function showRedAlertModal(data) {
+            document.getElementById("modal-candidate").textContent = data.candidate_id;
+            document.getElementById("modal-detail").textContent =
+                `${data.behaviour} — score ${data.score} — ${data.timestamp}`;
+            document.getElementById("red-alert-modal").classList.remove("hidden");
+            playAlertBeep();
+        }
+
+        document.getElementById("modal-dismiss").addEventListener("click", () => {
+            document.getElementById("red-alert-modal").classList.add("hidden");
+        });
+
+        // Renders a single alert event into the log, score bar, and seat
+        // map. Used for BOTH the live SSE stream and the /history replay
+        // on page load, so the two never fall out of sync with each other.
+        function renderAlertEvent(data, { isLive } = { isLive: true }) {
             const tbody = document.querySelector("#alert-log tbody");
             const row = document.createElement("tr");
             row.innerHTML = `
@@ -203,7 +295,6 @@
             `;
             tbody.prepend(row);
 
-            // 2. Score bar
             const bar = ensureScoreBar(data.candidate_id);
             const fill = bar.querySelector(".score-fill");
             const value = bar.querySelector(".score-value");
@@ -211,14 +302,37 @@
             fill.style.background = levelColor(data.level);
             value.textContent = data.score;
 
-            // 3. Seat map highlight
             const seatId = `seat-${data.candidate_id}`;
             const seat = document.getElementById(seatId);
             if (seat) {
                 seat.style.background = levelColor(data.level);
-                seat.classList.add("flash");
-                setTimeout(() => seat.classList.remove("flash"), 1500);
+                if (isLive) {
+                    seat.classList.add("flash");
+                    setTimeout(() => seat.classList.remove("flash"), 1500);
+                }
             }
+
+            // Only pop the modal/sound for LIVE red alerts — replaying old
+            // history on page load shouldn't re-trigger alarms for events
+            // that already happened before this page load.
+            if (isLive && data.level === "red") {
+                showRedAlertModal(data);
+            }
+        }
+
+        // 1. Load history first so the log isn't empty after a refresh
+        fetch("/history")
+            .then(r => r.json())
+            .then(events => {
+                events.forEach(e => renderAlertEvent(e, { isLive: false }));
+            })
+            .catch(err => console.error("Failed to load alert history:", err));
+
+        // 2. Then attach to the live stream for anything new
+        const source = new EventSource("/alerts");
+        source.onmessage = function (e) {
+            const data = JSON.parse(e.data);
+            renderAlertEvent(data, { isLive: true });
         };
     </script>
 </body>

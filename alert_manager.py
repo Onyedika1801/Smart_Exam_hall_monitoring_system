@@ -163,9 +163,21 @@ class AlertManager:
                 candidate_id TEXT NOT NULL,
                 timestamp REAL NOT NULL,
                 alert_level TEXT NOT NULL,
-                score REAL NOT NULL
+                score REAL NOT NULL,
+                behaviour_type TEXT,
+                camera_id TEXT
             )
         """)
+        conn.commit()
+
+        # Migration: if alerts table already existed from a previous run
+        # (before behaviour_type/camera_id were added), add the columns
+        # rather than requiring a fresh DB file. Safe to run every startup.
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alerts)")}
+        if "behaviour_type" not in existing_cols:
+            conn.execute("ALTER TABLE alerts ADD COLUMN behaviour_type TEXT")
+        if "camera_id" not in existing_cols:
+            conn.execute("ALTER TABLE alerts ADD COLUMN camera_id TEXT")
         conn.commit()
         conn.close()
 
@@ -184,12 +196,14 @@ class AlertManager:
         conn.commit()
         conn.close()
 
-    def _log_alert(self, candidate_id: str, level: str, score: float, now: float):
+    def _log_alert(self, candidate_id: str, level: str, score: float,
+                   now: float, event: "DetectionEvent"):
         conn = sqlite3.connect(self._db_path)
         conn.execute(
-            "INSERT INTO alerts (candidate_id, timestamp, alert_level, score) "
-            "VALUES (?, ?, ?, ?)",
-            (candidate_id, now, level, score)
+            "INSERT INTO alerts "
+            "(candidate_id, timestamp, alert_level, score, behaviour_type, camera_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (candidate_id, now, level, score, event.module, event.camera_id)
         )
         conn.commit()
         conn.close()
@@ -339,7 +353,7 @@ class AlertManager:
     def _fire_alert(self, candidate_id: str, level: str, score: float,
                      now: float, event: "DetectionEvent"):
         self.total_alerts_raised += 1
-        self._log_alert(candidate_id, level, score, now)
+        self._log_alert(candidate_id, level, score, now, event)
         logger.info(f"[AlertManager] {level.upper()} ALERT — "
                     f"{candidate_id} score={score:.1f}")
         if self._on_alert:
@@ -391,6 +405,22 @@ class AlertManager:
                 return None
             self._apply_idle_decay(state, time.time())
             return state.score
+
+    def get_recent_alerts(self, limit: int = 50) -> List[dict]:
+        """Read the most recent alerts straight from SQLite, newest first.
+        Used by the dashboard on page load so the alert log survives a
+        refresh instead of resetting to empty (browser memory alone
+        loses everything on reload)."""
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT candidate_id, timestamp, alert_level, score, "
+            "behaviour_type, camera_id FROM alerts "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
     def get_all_candidate_states(self) -> Dict[str, dict]:
         now = time.time()
