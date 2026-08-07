@@ -182,9 +182,52 @@
         .modal-dismiss.level-yellow:hover {
             background: #cbad2e;
         }
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 998;
+        }
+        .toast {
+            background: #1c1e23;
+            border-left: 4px solid #e5c73d;
+            border-radius: 6px;
+            padding: 12px 16px;
+            min-width: 240px;
+            max-width: 300px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            animation: toast-in 0.25s ease-out;
+        }
+        .toast.toast-out {
+            animation: toast-out 0.25s ease-in forwards;
+        }
+        @keyframes toast-in {
+            from { transform: translateX(30px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes toast-out {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(30px); opacity: 0; }
+        }
+        .toast-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #e5c73d;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .toast-body {
+            font-size: 13px;
+            color: #d0d0d0;
+        }
     </style>
 </head>
 <body>
+    <div id="toast-container" class="toast-container"></div>
+
     <h1>Exam Hall Monitor</h1>
     <p class="subtitle">Live feed + real detection pipeline (alert log, score bar, seat map)</p>
 
@@ -302,28 +345,37 @@
             }
         }
 
-        function showAlertModal(data) {
-            const isRed = data.level === "red";
-
-            const titleEl = document.getElementById("modal-title");
-            const boxEl = document.getElementById("modal-box");
-            const dismissEl = document.getElementById("modal-dismiss");
-
-            titleEl.textContent = isRed ? "🔴 RED ALERT" : "🟡 YELLOW ALERT";
-            titleEl.classList.toggle("level-yellow", !isRed);
-            boxEl.classList.toggle("level-yellow", !isRed);
-            dismissEl.classList.toggle("level-yellow", !isRed);
-
+        function showRedAlertModal(data) {
             document.getElementById("modal-candidate").textContent = data.candidate_id;
             document.getElementById("modal-detail").textContent =
                 `${data.behaviour} — score ${data.score} — ${data.timestamp}`;
             document.getElementById("alert-modal").classList.remove("hidden");
+            playAlertBeep();
+        }
 
-            // Only red alerts get the audio beep — yellow is "passive
-            // awareness" (visual only), matching the original spec.
-            if (isRed) {
-                playAlertBeep();
-            }
+        // Tracks which candidates have already received a yellow toast so
+        // we don't spam one every ~15s (yellow's cooldown) while they stay
+        // in the yellow zone. Cleared for a candidate the moment they cross
+        // into red, so a fresh escalation is never suppressed.
+        const yellowNotified = new Set();
+
+        function showYellowToast(data) {
+            const container = document.getElementById("toast-container");
+            const toast = document.createElement("div");
+            toast.className = "toast";
+            toast.innerHTML = `
+                <div class="toast-title">🟡 YELLOW ALERT</div>
+                <div class="toast-body">${data.candidate_id} — ${data.behaviour} (score ${data.score})</div>
+            `;
+            container.appendChild(toast);
+
+            // Auto-dismiss after 5s, non-blocking the whole time — this is
+            // the "email notification on your phone" style, not a modal
+            // that interrupts the invigilator's screen.
+            setTimeout(() => {
+                toast.classList.add("toast-out");
+                setTimeout(() => toast.remove(), 250);
+            }, 5000);
         }
 
         document.getElementById("modal-dismiss").addEventListener("click", () => {
@@ -362,12 +414,22 @@
                 }
             }
 
-            // Pop the modal for LIVE red AND yellow alerts (audio only on
-            // red — see showAlertModal). Replaying old history on page
-            // load shouldn't re-trigger popups for events that already
-            // happened before this page load.
-            if (isLive && (data.level === "red" || data.level === "yellow")) {
-                showAlertModal(data);
+            // Red alerts: interrupting modal + beep, every time (subject to
+            // the backend's own 30s cooldown). Yellow alerts: a single,
+            // non-blocking toast per candidate — suppressed on repeats
+            // until that candidate escalates to red, at which point the
+            // suppression resets so a future yellow episode notifies again.
+            // Neither fires when replaying /history on page load.
+            if (isLive) {
+                if (data.level === "red") {
+                    yellowNotified.delete(data.candidate_id);
+                    showRedAlertModal(data);
+                } else if (data.level === "yellow") {
+                    if (!yellowNotified.has(data.candidate_id)) {
+                        yellowNotified.add(data.candidate_id);
+                        showYellowToast(data);
+                    }
+                }
             }
         }
 
