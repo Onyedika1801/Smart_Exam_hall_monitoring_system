@@ -205,12 +205,25 @@ def alerts():
         with _sse_clients_lock:
             _sse_clients.append(client_queue)
         try:
-            while True:
-                event = client_queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
+            while _running:
+                # A timeout here (instead of an unbounded blocking get())
+                # is required so this generator periodically wakes up and
+                # checks _running. Without it, an open browser tab keeps
+                # this thread parked on get() forever, which was preventing
+                # the terminal from returning control after Ctrl+C/process
+                # shutdown until every connected tab was closed manually.
+                try:
+                    event = client_queue.get(timeout=15)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except queue.Empty:
+                    # SSE comment line (ignored by EventSource) — keeps the
+                    # connection alive through proxies/timeouts and gives
+                    # us a regular checkpoint to re-check _running.
+                    yield ": heartbeat\n\n"
         finally:
             with _sse_clients_lock:
-                _sse_clients.remove(client_queue)
+                if client_queue in _sse_clients:
+                    _sse_clients.remove(client_queue)
 
     return Response(stream(), mimetype="text/event-stream")
 
