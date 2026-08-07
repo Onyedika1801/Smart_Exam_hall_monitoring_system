@@ -293,7 +293,7 @@ class AlertManager:
             self._log_incident(event, contribution, state.score, alert_level)
 
             # 7. Dispatch alert if threshold crossed and cooldown allows
-            alert_dispatched = self._maybe_dispatch_alert(state, alert_level, now)
+            alert_dispatched = self._maybe_dispatch_alert(state, alert_level, now, event)
 
             self.total_events_processed += 1
 
@@ -316,36 +316,44 @@ class AlertManager:
         return "none"
 
     def _maybe_dispatch_alert(self, state: CandidateScoreState,
-                                alert_level: str, now: float) -> bool:
+                                alert_level: str, now: float,
+                                event: "DetectionEvent") -> bool:
         state.current_alert_level = alert_level
 
         if alert_level == "red":
             if (state.last_red_alert_time is None or
                     (now - state.last_red_alert_time) >= self._red_cooldown):
                 state.last_red_alert_time = now
-                self._fire_alert(state.candidate_id, "red", state.score, now)
+                self._fire_alert(state.candidate_id, "red", state.score, now, event)
                 return True
 
         elif alert_level == "yellow":
             if (state.last_yellow_alert_time is None or
                     (now - state.last_yellow_alert_time) >= self._yellow_cooldown):
                 state.last_yellow_alert_time = now
-                self._fire_alert(state.candidate_id, "yellow", state.score, now)
+                self._fire_alert(state.candidate_id, "yellow", state.score, now, event)
                 return True
 
         return False
 
-    def _fire_alert(self, candidate_id: str, level: str, score: float, now: float):
+    def _fire_alert(self, candidate_id: str, level: str, score: float,
+                     now: float, event: "DetectionEvent"):
         self.total_alerts_raised += 1
         self._log_alert(candidate_id, level, score, now)
         logger.info(f"[AlertManager] {level.upper()} ALERT — "
                     f"{candidate_id} score={score:.1f}")
         if self._on_alert:
+            # module/camera_id come from the specific DetectionEvent that
+            # crossed the threshold — this is the behaviour that triggered
+            # THIS alert, not necessarily the candidate's only contributing
+            # module (combination-bonus cases may have 2+ modules firing).
             self._on_alert({
                 'candidate_id': candidate_id,
                 'level': level,
                 'score': score,
                 'timestamp': now,
+                'behaviour': event.module,
+                'camera_id': event.camera_id,
             })
 
     # --------------------------------------------------------
