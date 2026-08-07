@@ -249,9 +249,29 @@
             return "#3d3f45";
         }
 
+        // A single AudioContext, created once, reused for every beep.
+        // Browsers block audio output until the user has interacted with
+        // the page at least once (click/keypress) — creating a NEW context
+        // per alert (as before) meant the very first alert almost always
+        // arrived before that interaction happened. Reusing one context and
+        // explicitly resuming it on first interaction fixes that.
+        let audioCtx = null;
+        function getAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return audioCtx;
+        }
+        ["click", "keydown"].forEach(evt => {
+            document.addEventListener(evt, () => {
+                const ctx = getAudioContext();
+                if (ctx.state === "suspended") ctx.resume();
+            }, { once: true });
+        });
+
         function playAlertBeep() {
             try {
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = getAudioContext();
                 const oscillator = ctx.createOscillator();
                 const gain = ctx.createGain();
                 oscillator.type = "square";
@@ -263,8 +283,8 @@
                 oscillator.start();
                 oscillator.stop(ctx.currentTime + 0.4);
             } catch (e) {
-                // Browsers block audio until the user interacts with the
-                // page at least once — not a bug. Visual modal still shows.
+                // Still blocked (no interaction yet) — visual modal still
+                // shows regardless, so the alert isn't silently lost.
             }
         }
 
