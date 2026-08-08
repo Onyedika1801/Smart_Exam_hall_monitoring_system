@@ -175,6 +175,14 @@ class ObjectPassingModule:
         self._hand_detection_conf = cfg['hand_detection_confidence']
         self._hand_tracking_conf = cfg['hand_tracking_confidence']
 
+        # --- Generic object detector (supplements the phone-only
+        # fine-tuned model — see config.yaml comment for why this exists) ---
+        self._use_generic_detector = cfg.get('use_generic_object_detector', False)
+        self._generic_model_path = cfg.get('generic_model_path', 'yolov8n.pt')
+        self._generic_object_conf = cfg.get('generic_object_confidence_threshold', 0.35)
+        self._generic_object_classes = set(cfg.get('generic_object_classes', []))
+        self._generic_model = None  # loaded in _load_models() if enabled
+
         self._grace_window_seconds = cfg['grace_window_seconds']
         self._burst_tracker = BurstTracker(
             window_seconds=cfg['burst_detection_window_seconds'],
@@ -301,6 +309,18 @@ class ObjectPassingModule:
                             f"YOLO running on CUDA (MediaPipe Hands remains on CPU)")
             else:
                 logger.info("[ObjectPassing] No GPU detected -- running on CPU")
+
+            if self._use_generic_detector:
+                logger.info(f"[ObjectPassing] Loading generic COCO detector: "
+                            f"{self._generic_model_path} (classes: "
+                            f"{sorted(self._generic_object_classes)})")
+                # Stock pretrained weights, NOT the fine-tuned phone model.
+                # ultralytics auto-downloads this on first use if it isn't
+                # already cached locally.
+                self._generic_model = YOLO(self._generic_model_path)
+                if torch.cuda.is_available():
+                    self._generic_model.to('cuda')
+                logger.info("[ObjectPassing] Generic detector loaded")
 
             self._hands = mp.solutions.hands.Hands(
                 static_image_mode=False,
@@ -501,11 +521,33 @@ class ObjectPassingModule:
 
     # --------------------------------------------------------
     def _detect_objects(self, frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        results = self._model(frame, conf=self._object_conf, imgsz=320, verbose=False)
         boxes = []
+
+        # 1. Fine-tuned phone detector — still authoritative for phones,
+        # highest confidence for that specific class.
+        results = self._model(frame, conf=self._object_conf, imgsz=320, verbose=False)
         for box in results[0].boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             boxes.append((x1, y1, x2, y2))
+
+        # 2. Generic COCO detector — catches book/cell phone/remote/
+        # scissors as proxies for exam materials the fine-tuned model
+        # was never trained to recognise (see config.yaml comment).
+        # Only boxes whose class name is in generic_object_classes are
+        # kept — we don't want every COCO class (chair, person, etc.)
+        # counting as "holding an object".
+        if self._use_generic_detector and self._generic_model is not None:
+            generic_results = self._generic_model(
+                frame, conf=self._generic_object_conf, imgsz=320, verbose=False
+            )
+            names = generic_results[0].names
+            for box in generic_results[0].boxes:
+                cls_id = int(box.cls[0])
+                cls_name = names.get(cls_id, "")
+                if cls_name in self._generic_object_classes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    boxes.append((x1, y1, x2, y2))
+
         return boxes
 
     def _detect_hands(self, frame: np.ndarray) -> List[Tuple[float, float]]:

@@ -124,6 +124,26 @@ object_passing:
                                                    # paper/pen dataset is
                                                    # trained (see limitations)
   object_confidence_threshold: 0.35
+
+  # --- Generic object detector (supplements the phone-only fine-tuned
+  # model above) ---
+  # model_path is fine-tuned ONLY on phones, so it essentially never
+  # recognises a held paper/booklet/pen as an object -- meaning a real
+  # hand-crossing WITH a passed item was being detected as "empty hand"
+  # and silently discarded (holding_object=False), even though the
+  # crossing itself was tracked correctly. This is a stopgap, NOT a
+  # substitute for a proper paper/pen dataset: COCO has no "paper" or
+  # "exam booklet" class, so "book" is used as the closest proxy and
+  # will still miss loose sheets, though it should catch folded/bound
+  # booklets, and cell phone/remote/scissors as a bonus safety net for
+  # small rigid items generally. Uses YOLOv8n's stock COCO-pretrained
+  # weights (auto-downloaded by ultralytics on first run if not cached
+  # locally) -- NOT the fine-tuned phone weights.
+  use_generic_object_detector: true
+  generic_model_path: "yolov8n.pt"
+  generic_object_confidence_threshold: 0.35
+  generic_object_classes: ["book", "cell phone", "remote", "scissors"]
+
   frame_skip: 2                   # Reduced from 3 now that GPU inference
                                    # is available for the YOLO half of this
                                    # module's per-frame cost. MediaPipe
@@ -135,7 +155,12 @@ object_passing:
                                    # POINT -- re-run test_object_passing.py
                                    # and main.py on the new hardware and
                                    # re-tune based on actual observed
-                                   # FPS/heat/queue backlog.
+                                   # FPS/heat/queue backlog. Adding the
+                                   # generic detector above makes this
+                                   # module heavier still (now THREE
+                                   # models per processed frame) -- watch
+                                   # FPS/queue backlog closely after
+                                   # enabling use_generic_object_detector.
   zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
   transfer_time_window_seconds: 1.5
   min_zone_separation: 0.15       # Min fraction of frame width between zones
