@@ -39,37 +39,16 @@ phone_detection:
                                   # Re-tune downward again if GPU throughput
                                   # under full four-module load doesn't
                                   # support full resolution in practice.
-  frame_skip: 2                  # Reduced from 4 now that GPU inference is
-                                  # available for this module. This is a
-                                  # conservative STARTING POINT, not a
-                                  # benchmarked value -- re-run
-                                  # test_phone_detection.py and main.py on
-                                  # the new hardware and adjust based on
-                                  # actual observed FPS/queue backlog,
-                                  # the same way the original CPU values
-                                  # were tuned (Section 4.7).
+  frame_skip: 1                  # Reduced from 2 -- process every frame.
+                                  # Was 2 (itself reduced from 4) as a
+                                  # conservative starting point once GPU
+                                  # inference became available; lowering
+                                  # further now on request. Watch FPS/queue
+                                  # backlog under full four-module load --
+                                  # if this module's queue starts backing
+                                  # up (see get_stats()['queue_size']),
+                                  # that's the signal to raise this back up.
   base_score: 35                 # Chapter 3 Table 3.5 — unambiguous violation
-
-  # --- Generic object detector (supplements the fine-tuned model above) ---
-  # Targets a specific known gap: a phone held boldly/flat in front of
-  # the camera (not near-ear) was frequently missed by the fine-tuned
-  # model, suspected to be a training-data pose bias (most public phone
-  # datasets, and likely a chunk of this one, skew toward calling
-  # poses). YOLOv8n's stock COCO-pretrained weights include a "cell
-  # phone" class trained on a much larger and more pose-diverse image
-  # set, so it may catch some bold-hold cases the fine-tuned model
-  # misses. This is a stopgap for symptom coverage, NOT a fix for the
-  # underlying dataset gap -- retraining with more bold-hold pose
-  # examples is still the real fix (see earlier discussion/limitations).
-  # Also NOTE: the generic model's confidence scores come from a
-  # DIFFERENT model with a different confidence distribution than the
-  # fine-tuned one -- Table 3.7's confidence-weight tiers are applied
-  # identically regardless of source, which is an approximation worth
-  # being explicit about if this is discussed at defence.
-  use_generic_object_detector: true
-  generic_model_path: "yolov8n.pt"
-  generic_object_confidence_threshold: 0.45
-  generic_object_classes: ["cell phone"]
 
   # Confidence weighting (Chapter 3 Table 3.7)
   confidence_weights:
@@ -165,23 +144,18 @@ object_passing:
   generic_object_confidence_threshold: 0.35
   generic_object_classes: ["book", "cell phone", "remote", "scissors"]
 
-  frame_skip: 2                   # Reduced from 3 now that GPU inference
-                                   # is available for the YOLO half of this
-                                   # module's per-frame cost. MediaPipe
-                                   # Hands (the other half) still runs on
-                                   # CPU regardless (see _load_models() in
-                                   # object_passing.py), so this module
-                                   # remains the heaviest of the four even
-                                   # on GPU hardware. This is a STARTING
-                                   # POINT -- re-run test_object_passing.py
-                                   # and main.py on the new hardware and
-                                   # re-tune based on actual observed
-                                   # FPS/heat/queue backlog. Adding the
-                                   # generic detector above makes this
-                                   # module heavier still (now THREE
-                                   # models per processed frame) -- watch
-                                   # FPS/queue backlog closely after
-                                   # enabling use_generic_object_detector.
+  frame_skip: 1                   # Reduced from 2 -- process every frame,
+                                   # on request. Flagging directly: this is
+                                   # the heaviest module already (YOLO
+                                   # fine-tuned model + generic COCO model +
+                                   # MediaPipe Hands, THREE models per
+                                   # processed frame), so frame_skip=1 here
+                                   # is the most likely of the four modules
+                                   # to cause real FPS/queue backlog,
+                                   # especially without a GPU. Watch
+                                   # get_stats()['queue_size'] and terminal
+                                   # FPS closely -- if it backs up, this is
+                                   # the first value to raise back up.
   zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
   transfer_time_window_seconds: 1.5
   min_zone_separation: 0.15       # Min fraction of frame width between zones

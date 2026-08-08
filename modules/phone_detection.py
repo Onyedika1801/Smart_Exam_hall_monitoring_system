@@ -184,14 +184,6 @@ class PhoneDetectionModule:
         self._model_path = ph_cfg['model_path']
         self._imgsz = ph_cfg['inference_image_size']
 
-        # --- Generic object detector (supplements the fine-tuned model —
-        # see config.yaml comment for the bold-hold-pose rationale) ---
-        self._use_generic_detector = ph_cfg.get('use_generic_object_detector', False)
-        self._generic_model_path = ph_cfg.get('generic_model_path', 'yolov8n.pt')
-        self._generic_conf_threshold = ph_cfg.get('generic_object_confidence_threshold', 0.45)
-        self._generic_classes = set(ph_cfg.get('generic_object_classes', ['cell phone']))
-        self._generic_model = None  # loaded in _load_model() if enabled
-
         # Zone tracker — initialised on first frame
         self._zone_tracker: Optional[CandidateZoneTracker] = None
 
@@ -284,15 +276,6 @@ class PhoneDetectionModule:
             else:
                 logger.info("[PhoneDetection] No GPU detected -- running on CPU")
 
-            if self._use_generic_detector:
-                logger.info(f"[PhoneDetection] Loading generic COCO detector: "
-                            f"{self._generic_model_path} (classes: "
-                            f"{sorted(self._generic_classes)})")
-                self._generic_model = YOLO(self._generic_model_path)
-                if torch.cuda.is_available():
-                    self._generic_model.to('cuda')
-                logger.info("[PhoneDetection] Generic detector loaded")
-
             logger.info("[PhoneDetection] Model loaded successfully")
         except Exception as e:
             logger.error(f"[PhoneDetection] Failed to load model: {e}")
@@ -319,110 +302,82 @@ class PhoneDetectionModule:
         if self._zone_tracker is None:
             self._zone_tracker = CandidateZoneTracker(w, h)
 
-        # 1. Fine-tuned phone detector — primary source, trained
-        # specifically on this project's dataset.
-        detections = []  # list of (x1, y1, x2, y2, confidence, source)
+        # Run inference
         results = self._model(
             frame,
             conf=self._conf_threshold,
             imgsz=self._imgsz,
             verbose=False
         )
+
         for result in results:
             if result.boxes is None:
                 continue
+
             for box in result.boxes:
                 confidence = float(box.conf[0])
+
+                # Double-check threshold (model should already filter, but be explicit)
                 if confidence < self._conf_threshold:
                     continue
+
+                # Get bounding box coordinates
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
-                detections.append((x1, y1, x2, y2, confidence, "fine_tuned"))
+                x_centre = (x1 + x2) / 2
+                y_centre = (y1 + y2) / 2
 
-        # 2. Generic COCO detector — supplementary source, catches some
-        # bold-hold poses the fine-tuned model misses (see config.yaml
-        # comment). Confidence comes from a different model/distribution
-        # than the fine-tuned one; Table 3.7 weighting is still applied
-        # the same way regardless of source (see config.yaml note).
-        if self._use_generic_detector and self._generic_model is not None:
-            generic_results = self._generic_model(
-                frame, conf=self._generic_conf_threshold,
-                imgsz=self._imgsz, verbose=False
-            )
-            for result in generic_results:
-                if result.boxes is None:
+                # Assign candidate ID from grid position
+                candidate_id = self._zone_tracker.get_candidate_id(x_centre, y_centre)
+
+                # Per-candidate re-alert cooldown -- see __init__ note.
+                # A single qualifying detection is still sufficient to
+                # alert immediately (no persistence delay), but repeat
+                # detections of the SAME candidate within the cooldown
+                # window are skipped entirely rather than each creating
+                # a fresh, fully-scored event.
+                now = time.time()
+                last_time = self._last_event_time.get(candidate_id)
+                if last_time is not None and (now - last_time) < self._re_alert_cooldown:
                     continue
-                names = result.names
-                for box in result.boxes:
-                    cls_id = int(box.cls[0])
-                    cls_name = names.get(cls_id, "")
-                    if cls_name not in self._generic_classes:
-                        continue
-                    confidence = float(box.conf[0])
-                    if confidence < self._generic_conf_threshold:
-                        continue
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    detections.append((x1, y1, x2, y2, confidence, "generic_coco"))
 
-        for (x1, y1, x2, y2, confidence, source) in detections:
-            x_centre = (x1 + x2) / 2
-            y_centre = (y1 + y2) / 2
+                # Apply confidence weight (Table 3.7)
+                conf_weight = calculate_confidence_weight(confidence, self.config)
+                if conf_weight == 0.0:
+                    continue  # Below minimum useful threshold
 
-            # Assign candidate ID from grid position
-            candidate_id = self._zone_tracker.get_candidate_id(x_centre, y_centre)
+                weighted_score = self._base_score * conf_weight
 
-            # Per-candidate re-alert cooldown -- see __init__ note.
-            # A single qualifying detection is still sufficient to
-            # alert immediately (no persistence delay), but repeat
-            # detections of the SAME candidate within the cooldown
-            # window are skipped entirely rather than each creating
-            # a fresh, fully-scored event. This also naturally
-            # de-duplicates the (rare) case where BOTH the fine-tuned
-            # and generic models detect the same physical phone in
-            # the same processed frame -- the first one sets
-            # _last_event_time, so the second is skipped here.
-            now = time.time()
-            last_time = self._last_event_time.get(candidate_id)
-            if last_time is not None and (now - last_time) < self._re_alert_cooldown:
-                continue
+                # Build detection event
+                event = DetectionEvent(
+                    module="phone_detection",
+                    candidate_id=candidate_id,
+                    behaviour_type="phone_detected",
+                    confidence=confidence,
+                    base_score=self._base_score,
+                    weighted_score=weighted_score,
+                    bbox=(int(x1), int(y1), int(x2), int(y2)),
+                    frame_number=frame_number,
+                    timestamp=now,
+                    camera_id=self.camera_id,
+                    duration_seconds=0.0,
+                    requires_persistence=False  # Phone = immediate alert (Section 3.7.3)
+                )
+                self._last_event_time[candidate_id] = now
 
-            # Apply confidence weight (Table 3.7)
-            conf_weight = calculate_confidence_weight(confidence, self.config)
-            if conf_weight == 0.0:
-                continue  # Below minimum useful threshold
+                # Push to shared alert queue for alert_manager
+                try:
+                    self.alert_queue.put_nowait(event)
+                except queue.Full:
+                    logger.warning("[PhoneDetection] Alert queue full — event dropped")
 
-            weighted_score = self._base_score * conf_weight
-
-            # Build detection event
-            event = DetectionEvent(
-                module="phone_detection",
-                candidate_id=candidate_id,
-                behaviour_type="phone_detected",
-                confidence=confidence,
-                base_score=self._base_score,
-                weighted_score=weighted_score,
-                bbox=(int(x1), int(y1), int(x2), int(y2)),
-                frame_number=frame_number,
-                timestamp=now,
-                camera_id=self.camera_id,
-                duration_seconds=0.0,
-                requires_persistence=False  # Phone = immediate alert (Section 3.7.3)
-            )
-            self._last_event_time[candidate_id] = now
-
-            # Push to shared alert queue for alert_manager
-            try:
-                self.alert_queue.put_nowait(event)
-            except queue.Full:
-                logger.warning("[PhoneDetection] Alert queue full — event dropped")
-
-            self.detections_total += 1
-            logger.debug(
-                f"[PhoneDetection] Phone detected ({source}) — "
-                f"candidate: {candidate_id}, "
-                f"conf: {confidence:.3f}, "
-                f"weighted_score: {weighted_score:.1f}, "
-                f"frame: {frame_number}"
-            )
+                self.detections_total += 1
+                logger.debug(
+                    f"[PhoneDetection] Phone detected — "
+                    f"candidate: {candidate_id}, "
+                    f"conf: {confidence:.3f}, "
+                    f"weighted_score: {weighted_score:.1f}, "
+                    f"frame: {frame_number}"
+                )
 
     def draw_detections(self, frame: np.ndarray,
                         events: list) -> np.ndarray:
