@@ -533,54 +533,20 @@ class ObjectPassingModule:
         # 2. Generic COCO detector — catches book/cell phone/remote/
         # scissors as proxies for exam materials the fine-tuned model
         # was never trained to recognise (see config.yaml comment).
-        # Only boxes whose class name is in generic_object_classes AND
-        # whose confidence meets generic_object_conf are kept as real,
-        # functional detections.
-        #
-        # DEBUG NEAR-MISS LOGGING: the model is run with a much lower
-        # internal floor (0.10) than the real accept threshold, purely
-        # so we can log what it saw and REJECTED (too low confidence,
-        # or right confidence but wrong class) -- without this, a miss
-        # is silent and indistinguishable from "nothing was there at
-        # all", which made earlier tuning pure guesswork. This is
-        # debug-only overhead (one extra inference pass's worth of log
-        # lines, not extra models) -- safe to remove/quiet down once
-        # tuning is done, by raising DEBUG_FLOOR back up to
-        # generic_object_conf or dropping this block entirely.
+        # Only boxes whose class name is in generic_object_classes are
+        # kept — we don't want every COCO class (chair, person, etc.)
+        # counting as "holding an object".
         if self._use_generic_detector and self._generic_model is not None:
-            DEBUG_FLOOR = 0.10
             generic_results = self._generic_model(
-                frame, conf=DEBUG_FLOOR, imgsz=320, verbose=False
+                frame, conf=self._generic_object_conf, imgsz=320, verbose=False
             )
             names = generic_results[0].names
             for box in generic_results[0].boxes:
                 cls_id = int(box.cls[0])
                 cls_name = names.get(cls_id, "")
-                confidence = float(box.conf[0])
-
-                accepted = (
-                    cls_name in self._generic_object_classes
-                    and confidence >= self._generic_object_conf
-                )
-
-                if accepted:
+                if cls_name in self._generic_object_classes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     boxes.append((x1, y1, x2, y2))
-                    logger.debug(
-                        f"[ObjectPassing] generic detector ACCEPTED: "
-                        f"'{cls_name}' conf={confidence:.2f} "
-                        f"(threshold={self._generic_object_conf})"
-                    )
-                else:
-                    reason = (
-                        "below threshold" if cls_name in self._generic_object_classes
-                        else "class not in generic_object_classes"
-                    )
-                    logger.debug(
-                        f"[ObjectPassing] generic detector REJECTED: "
-                        f"'{cls_name}' conf={confidence:.2f} "
-                        f"(threshold={self._generic_object_conf}, reason={reason})"
-                    )
 
         return boxes
 
