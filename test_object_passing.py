@@ -39,6 +39,7 @@ NOTE ON THIS MODULE'S ARCHITECTURE (updated):
 """
 
 import argparse
+import logging
 import queue
 import time
 import sys
@@ -201,5 +202,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Object Passing isolation test")
     parser.add_argument("--source", default="0", help="Camera index or video path")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    parser.add_argument(
+        "--quiet-detections", action="store_true",
+        help="Suppress the generic detector's per-frame near-miss debug "
+             "logs (what it saw and rejected, and why). These are ON by "
+             "default to help tune generic_object_confidence_threshold "
+             "in config.yaml; pass this flag once you're done tuning, "
+             "since they print on every processed frame that has any "
+             "candidate box at all."
+    )
     args = parser.parse_args()
+
+    # Show object_passing's near-miss debug logs (what the generic
+    # detector saw and rejected, and why) without also enabling
+    # DEBUG-level noise from ultralytics/mediapipe/urllib3/etc, which
+    # would flood the terminal.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if not args.quiet_detections:
+        logging.getLogger("modules.object_passing").setLevel(logging.DEBUG)
+
     run_isolation_test(args.source, args.config)
