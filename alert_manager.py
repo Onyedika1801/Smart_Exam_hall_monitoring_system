@@ -368,6 +368,7 @@ class AlertManager:
                 'timestamp': now,
                 'behaviour': event.module,
                 'camera_id': event.camera_id,
+                'bbox': event.bbox,
             })
 
     # --------------------------------------------------------

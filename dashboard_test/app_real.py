@@ -22,13 +22,15 @@ Then open http://localhost:5000
 
 import argparse
 import json
+import os
 import queue
 import threading
 import time
 
 import cv2
+import numpy as np
 import yaml
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, send_from_directory
 
 from modules.phone_detection import PhoneDetectionModule
 from modules.gaze_detection import GazeDetectionModule
@@ -46,18 +48,66 @@ _sse_clients = []
 _sse_clients_lock = threading.Lock()
 _alert_manager = None
 
+# Snapshots are saved next to this file, named "{candidate_id}_{timestamp}.jpg".
+# This filename convention (rather than a DB column) means /history can
+# reconstruct the expected filename from data alert_manager already logs
+# (candidate_id + timestamp), with no schema change and no second write
+# racing against alert_manager's own DB write in _log_alert().
+SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "snapshots")
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+
+
+def snapshot_filename(candidate_id: str, timestamp: float) -> str:
+    return f"{candidate_id}_{timestamp:.3f}.jpg"
+
 
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
+def save_snapshot(candidate_id: str, timestamp: float, bbox) -> bool:
+    """Grabs the current live frame, draws the triggering detection's
+    bounding box on it (if available), and saves it to disk. Uses
+    whatever frame is live in _latest_frame AT THE MOMENT the alert
+    fires — not the exact frame the detection ran on (that frame is
+    long gone by the time an alert reaches this callback, given the
+    per-module queues and alert_manager's own processing thread). For
+    a snapshot's purpose (invigilator context, not forensic-grade
+    frame-accuracy), a frame within a fraction of a second of the real
+    detection is an acceptable, documented approximation."""
+    with _frame_lock:
+        frame_bytes = _latest_frame
+
+    if frame_bytes is None:
+        return False
+
+    frame = cv2.imdecode(np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return False
+
+    # object_passing uses (0,0,0,0) as a placeholder since it isn't a
+    # single-box detection by nature (see its DetectionEvent construction)
+    # — skip drawing in that case rather than drawing a meaningless box
+    # in the frame's corner.
+    if bbox and tuple(bbox) != (0, 0, 0, 0):
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+    filename = snapshot_filename(candidate_id, timestamp)
+    path = os.path.join(SNAPSHOT_DIR, filename)
+    ok = cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return bool(ok)
+
+
 def broadcast_alert(alert_dict: dict):
     """on_alert callback passed into AlertManager — pushes the real alert
     to every connected SSE client, reformatted to match what the Step 2
     front-end already expects (candidate_id, row, col, behaviour, score,
-    level, camera_id, timestamp)."""
+    level, camera_id, timestamp), plus a snapshot filename if capture
+    succeeded."""
     candidate_id = alert_dict["candidate_id"]  # e.g. "R2C3"
+    timestamp = alert_dict["timestamp"]
     row, col = None, None
     try:
         # candidate_id format is "R{row}C{col}" per CandidateZoneTracker
@@ -65,6 +115,8 @@ def broadcast_alert(alert_dict: dict):
         row, col = int(r_part), int(c_part)
     except (ValueError, IndexError):
         pass  # if format ever changes, seat map just won't highlight this one
+
+    snapshot_saved = save_snapshot(candidate_id, timestamp, alert_dict.get("bbox"))
 
     event = {
         "candidate_id": candidate_id,
@@ -74,7 +126,8 @@ def broadcast_alert(alert_dict: dict):
         "score": round(alert_dict["score"], 1),
         "level": alert_dict["level"],
         "camera_id": alert_dict.get("camera_id", "cam_0"),
-        "timestamp": time.strftime("%H:%M:%S", time.localtime(alert_dict["timestamp"])),
+        "timestamp": time.strftime("%H:%M:%S", time.localtime(timestamp)),
+        "snapshot": snapshot_filename(candidate_id, timestamp) if snapshot_saved else None,
     }
 
     with _sse_clients_lock:
@@ -172,12 +225,19 @@ def history():
     events = []
     for row in reversed(rows):  # oldest first, so front-end prepend logic matches live order
         candidate_id = row["candidate_id"]
+        timestamp = row["timestamp"]
         row_num, col_num = None, None
         try:
             r_part, c_part = candidate_id[1:].split("C")
             row_num, col_num = int(r_part), int(c_part)
         except (ValueError, IndexError):
             pass
+
+        # Reconstruct the expected snapshot filename and confirm it
+        # actually exists on disk before offering it — older alerts
+        # logged before snapshot capture existed won't have one.
+        expected_name = snapshot_filename(candidate_id, timestamp)
+        has_snapshot = os.path.exists(os.path.join(SNAPSHOT_DIR, expected_name))
 
         events.append({
             "candidate_id": candidate_id,
@@ -187,10 +247,16 @@ def history():
             "score": round(row["score"], 1),
             "level": row["alert_level"],
             "camera_id": row["camera_id"] or "cam_0",
-            "timestamp": time.strftime("%H:%M:%S", time.localtime(row["timestamp"])),
+            "timestamp": time.strftime("%H:%M:%S", time.localtime(timestamp)),
+            "snapshot": expected_name if has_snapshot else None,
         })
 
     return json.dumps(events), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/snapshots/<path:filename>")
+def snapshot(filename):
+    return send_from_directory(SNAPSHOT_DIR, filename)
 
 
 @app.route("/video_feed")

@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 venv/
 *.egg-info/
+
+# Detection snapshots (generated at runtime, not source)
+dashboard_test/snapshots/
