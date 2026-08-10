@@ -222,9 +222,17 @@ object_passing:
   # instead of it) — covers the very start of the exam when attendance
   # is most predictably passed, even if burst detection's threshold
   # isn't met for some reason (e.g. slow/staggered passing).
-  grace_window_seconds: 150             # First 2.5 minutes: crossings are
-                                          # logged but not scored. Reduced
-                                          # from 240 on request.
+  grace_window_seconds: 130             # First ~2.2 minutes: crossings are
+                                          # logged but not scored. Set to
+                                          # match gaze_detection's
+                                          # pitch_calibration_window_seconds
+                                          # (130s) so both windows end at
+                                          # the same time, on request.
+                                          # Coincidence of value, not a
+                                          # shared config variable -- if
+                                          # one changes later, update the
+                                          # other manually to keep them
+                                          # aligned.
 
 # --- Scoring & Alert System (Section 3.10) ---
 scoring:
