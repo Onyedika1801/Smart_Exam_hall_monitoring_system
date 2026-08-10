@@ -217,6 +217,18 @@
             margin-left: 6px;
             opacity: 0.6;
         }
+        #alert-log tbody tr.session-divider td {
+            padding: 10px 8px 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #6a6d73;
+            text-transform: uppercase;
+            border-bottom: 1px solid #23262b;
+            border-top: 1px solid #23262b;
+            cursor: default;
+            background: #17191d;
+        }
         .toast-container {
             position: fixed;
             top: 20px;
@@ -491,11 +503,43 @@
             }
         }
 
+        // Inserts a labeled header row above whatever's currently at the
+        // top of the alert log table — used to mark where one testing
+        // session's alerts end and an earlier one begins, since /history
+        // can span many separate runs of app_real.py across different
+        // times/days with nothing else distinguishing them.
+        function insertSessionDivider(label) {
+            const tbody = document.querySelector("#alert-log tbody");
+            const divider = document.createElement("tr");
+            divider.className = "session-divider";
+            divider.innerHTML = `<td colspan="5">${label}</td>`;
+            tbody.prepend(divider);
+        }
+
         // 1. Load history first so the log isn't empty after a refresh
         fetch("/history")
             .then(r => r.json())
             .then(events => {
-                events.forEach(e => renderAlertEvent(e, { isLive: false }));
+                // Events arrive oldest-first. Render each (which prepends
+                // it, so newest ends up on top overall), and whenever a
+                // NEW session starts, close out the PREVIOUS session's
+                // block with a divider first — that divider gets prepended
+                // after all of that session's rows, landing correctly at
+                // the top of that now-complete block. The final (most
+                // recent) session's divider is flushed after the loop.
+                let currentSessionLabel = null;
+                events.forEach(e => {
+                    if (e.new_session) {
+                        if (currentSessionLabel !== null) {
+                            insertSessionDivider(currentSessionLabel);
+                        }
+                        currentSessionLabel = e.session_label;
+                    }
+                    renderAlertEvent(e, { isLive: false });
+                });
+                if (currentSessionLabel !== null) {
+                    insertSessionDivider(currentSessionLabel);
+                }
             })
             .catch(err => console.error("Failed to load alert history:", err));
 

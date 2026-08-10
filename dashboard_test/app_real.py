@@ -128,6 +128,11 @@ def broadcast_alert(alert_dict: dict):
         "camera_id": alert_dict.get("camera_id", "cam_0"),
         "timestamp": time.strftime("%H:%M:%S", time.localtime(timestamp)),
         "snapshot": snapshot_filename(candidate_id, timestamp) if snapshot_saved else None,
+        # Live events are always continuous with whatever session is
+        # currently running -- session boundaries are only meaningful
+        # when replaying /history across potentially many past sessions.
+        "new_session": False,
+        "session_label": None,
     }
 
     with _sse_clients_lock:
@@ -261,13 +266,27 @@ def history():
     """Returns recent alert history from SQLite so the dashboard's alert
     log, score bars, and seat map can repopulate after a page refresh
     instead of starting empty. Uses the same AlertManager instance the
-    live pipeline is already writing to."""
+    live pipeline is already writing to.
+
+    Also tags each event with a session boundary marker: if the gap
+    since the PREVIOUS alert (chronologically) exceeds SESSION_GAP_SECONDS,
+    this event is flagged as the start of a new session. This is a
+    heuristic inferred from timestamp gaps, not a real session ID -- no
+    DB schema change needed, and it works retroactively on alerts
+    logged before this feature existed. A restart of app_real.py with
+    no real gap in time (e.g. quick Ctrl+C and re-run within a minute)
+    will NOT be treated as a new session; only an actual time gap is."""
     if _alert_manager is None:
         return json.dumps([]), 200, {"Content-Type": "application/json"}
 
+    SESSION_GAP_SECONDS = 900  # 15 minutes
+
     rows = _alert_manager.get_recent_alerts(limit=50)
+    rows = list(reversed(rows))  # oldest first, so front-end prepend logic matches live order
+
     events = []
-    for row in reversed(rows):  # oldest first, so front-end prepend logic matches live order
+    previous_timestamp = None
+    for row in rows:
         candidate_id = row["candidate_id"]
         timestamp = row["timestamp"]
         row_num, col_num = None, None
@@ -283,6 +302,12 @@ def history():
         expected_name = snapshot_filename(candidate_id, timestamp)
         has_snapshot = os.path.exists(os.path.join(SNAPSHOT_DIR, expected_name))
 
+        is_new_session = (
+            previous_timestamp is None
+            or (timestamp - previous_timestamp) > SESSION_GAP_SECONDS
+        )
+        previous_timestamp = timestamp
+
         events.append({
             "candidate_id": candidate_id,
             "row": row_num,
@@ -293,6 +318,8 @@ def history():
             "camera_id": row["camera_id"] or "cam_0",
             "timestamp": time.strftime("%H:%M:%S", time.localtime(timestamp)),
             "snapshot": expected_name if has_snapshot else None,
+            "new_session": is_new_session,
+            "session_label": time.strftime("%b %d, %Y — session from %H:%M", time.localtime(timestamp)),
         })
 
     return json.dumps(events), 200, {"Content-Type": "application/json"}
