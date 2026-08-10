@@ -168,6 +168,7 @@ def pipeline_loop(source, config):
     time.sleep(2.0)  # let model loading finish, same as main.py
 
     frame_number = 0
+    last_stats_print = time.time()
     print("[INFO] Real detection pipeline started")
 
     try:
@@ -188,12 +189,55 @@ def pipeline_loop(source, config):
             if ok:
                 with _frame_lock:
                     _latest_frame = buffer.tobytes()
+
+            # Periodic status print — same 10s cadence as main.py's
+            # _print_status(), so you're not debugging blind on any
+            # module (especially object_passing) while running the
+            # dashboard instead of the isolation test scripts.
+            if time.time() - last_stats_print >= 10.0:
+                print_status(
+                    phone_module, gaze_module, posture_module,
+                    object_passing_module, frame_number
+                )
+                last_stats_print = time.time()
     finally:
         for m in (phone_module, gaze_module, posture_module, object_passing_module):
             m.stop()
         alert_manager.stop()
         cap.release()
         print("[INFO] Pipeline shut down")
+
+
+def print_status(phone_module, gaze_module, posture_module,
+                  object_passing_module, frame_number):
+    print("\n" + "=" * 60)
+    print(f"STATUS — Frame: {frame_number}")
+    print("-" * 60)
+    for name, module in [
+        ("phone_detection", phone_module),
+        ("gaze_detection", gaze_module),
+        ("posture_analysis", posture_module),
+        ("object_passing", object_passing_module),
+    ]:
+        stats = module.get_stats()
+        print(f"  {name:<18} queue={stats['queue_size']:<4} "
+              f"processed={stats['frames_processed']} fps={stats.get('fps', '?')}")
+
+    # object_passing's extra diagnostic counters — this is the detail
+    # that was missing while running the full dashboard, versus
+    # test_object_passing.py which already showed this.
+    op_stats = object_passing_module.get_stats()
+    print("-" * 60)
+    print("  object_passing detail:")
+    print(f"    hand_observations={op_stats['total_hand_observations']} "
+          f"crossings_detected={op_stats['total_crossings_detected']} "
+          f"events_emitted={op_stats['events_emitted']}")
+    print(f"    suppressed: grace={op_stats['suppressed_grace_window']} "
+          f"burst={op_stats['suppressed_burst']} "
+          f"zone_sep={op_stats['suppressed_zone_separation']}")
+    print(f"    in_grace_window={op_stats['in_grace_window']} "
+          f"zone_separation_reliable={op_stats['zone_separation_reliable']}")
+    print("=" * 60 + "\n")
 
 
 def generate_mjpeg():
