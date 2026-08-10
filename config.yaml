@@ -39,15 +39,21 @@ phone_detection:
                                   # Re-tune downward again if GPU throughput
                                   # under full four-module load doesn't
                                   # support full resolution in practice.
-  frame_skip: 1                  # Reduced from 2 -- process every frame.
-                                  # Was 2 (itself reduced from 4) as a
-                                  # conservative starting point once GPU
-                                  # inference became available; lowering
-                                  # further now on request. Watch FPS/queue
-                                  # backlog under full four-module load --
-                                  # if this module's queue starts backing
-                                  # up (see get_stats()['queue_size']),
-                                  # that's the signal to raise this back up.
+  frame_skip: 3                  # Raised from 1 back to 3, based on real
+                                  # evidence: a full 10-min four-module
+                                  # session showed this module's queue
+                                  # stuck at 30/30 (full) the ENTIRE
+                                  # session, with actual throughput of
+                                  # only ~0.5-0.6 fps despite the camera
+                                  # running ~25-30 fps -- meaning frames
+                                  # were being silently dropped via queue
+                                  # overflow anyway, just unpredictably
+                                  # rather than deliberately. This value
+                                  # is a reasoned estimate from that
+                                  # evidence, not yet re-benchmarked --
+                                  # check get_stats()['queue_size'] on
+                                  # the next real test; if it's still
+                                  # pinned at max, raise further.
   base_score: 35                 # Chapter 3 Table 3.5 — unambiguous violation
 
   # Confidence weighting (Chapter 3 Table 3.7)
@@ -165,18 +171,24 @@ object_passing:
                                                # this value.
   generic_object_classes: ["book", "cell phone", "remote", "scissors"]
 
-  frame_skip: 1                   # Reduced from 2 -- process every frame,
-                                   # on request. Flagging directly: this is
-                                   # the heaviest module already (YOLO
-                                   # fine-tuned model + generic COCO model +
-                                   # MediaPipe Hands, THREE models per
-                                   # processed frame), so frame_skip=1 here
-                                   # is the most likely of the four modules
-                                   # to cause real FPS/queue backlog,
-                                   # especially without a GPU. Watch
-                                   # get_stats()['queue_size'] and terminal
-                                   # FPS closely -- if it backs up, this is
-                                   # the first value to raise back up.
+  frame_skip: 5                   # Raised from 1 to 5 -- this module runs
+                                   # TWO YOLO models per processed frame
+                                   # (fine-tuned + generic COCO) plus
+                                   # MediaPipe Hands, making it the
+                                   # heaviest of the four. Real evidence
+                                   # from a 10-min four-module session:
+                                   # queue stuck at 30/30 the ENTIRE run,
+                                   # actual throughput only ~0.36-0.53 fps
+                                   # (and still falling) against a ~25-30
+                                   # fps camera -- meaning it was already
+                                   # processing roughly 1 in 50-70 real
+                                   # frames via silent queue-overflow
+                                   # drops, not the frame_skip setting.
+                                   # 5 is a reasoned starting point given
+                                   # that ratio, NOT yet re-benchmarked --
+                                   # re-check get_stats() on the next
+                                   # real test and adjust from actual
+                                   # numbers, not this estimate alone.
   zone_padding_pixels: 80         # Pixels beyond body keypoints = personal zone
   transfer_time_window_seconds: 1.5
   min_zone_separation: 0.15       # Min fraction of frame width between zones
