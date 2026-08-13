@@ -246,7 +246,7 @@ def print_status(phone_module, gaze_module, posture_module,
 
 
 def generate_mjpeg():
-    while True:
+    while _running:
         with _frame_lock:
             frame = _latest_frame
         if frame is None:
