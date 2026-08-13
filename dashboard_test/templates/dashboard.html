@@ -49,7 +49,7 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 16px;
-            align-items: stretch;
+            align-items: start;
         }
         @media (max-width: 480px) {
             .main-split {
@@ -70,7 +70,8 @@
         .video-container img {
             display: block;
             width: 100%;
-            height: auto;
+            height: 100%;
+            object-fit: cover;
         }
         .status {
             margin-top: 10px;
@@ -88,7 +89,7 @@
             display: grid;
             grid-template-columns: repeat(5, 1fr);
             gap: 6px;
-            width: 92%;
+            width: 89%;
         }
         .seat {
             aspect-ratio: 1;
@@ -421,6 +422,27 @@
             }
         }
 
+        // Video panel matches the seat map's ACTUAL rendered height,
+        // rather than being left to its own aspect ratio — the two grids
+        // (5x4 seats vs. a video frame) don't naturally share a height,
+        // so a pure-CSS match isn't possible; this measures the seat
+        // map's real height once it's laid out and applies it to the
+        // video container. Re-measured on resize since the seat map's
+        // height changes with panel width (fixed aspect-ratio cells).
+        function syncVideoHeightToSeatMap() {
+            const videoContainer = document.querySelector(".video-container");
+            if (!videoContainer) return;
+            const seatMapHeight = seatMap.getBoundingClientRect().height;
+            if (seatMapHeight > 0) {
+                videoContainer.style.height = seatMapHeight + "px";
+            }
+        }
+        // Run after layout settles (fonts/images can shift height right
+        // after DOMContentLoaded), and again on any resize.
+        window.addEventListener("load", syncVideoHeightToSeatMap);
+        window.addEventListener("resize", syncVideoHeightToSeatMap);
+        syncVideoHeightToSeatMap();
+
         const scoreBars = {};  // candidate_id -> DOM element
 
         function ensureScoreBar(candidateId) {
@@ -487,16 +509,34 @@
         function playAlertBeep() {
             try {
                 const ctx = getAudioContext();
-                const oscillator = ctx.createOscillator();
-                const gain = ctx.createGain();
-                oscillator.type = "square";
-                oscillator.frequency.value = 880;
-                gain.gain.setValueAtTime(0.15, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-                oscillator.connect(gain);
-                gain.connect(ctx.destination);
-                oscillator.start();
-                oscillator.stop(ctx.currentTime + 0.4);
+                const now = ctx.currentTime;
+
+                // Two quick ascending sine-wave notes (like a phone
+                // notification "ding-ding") instead of one harsh square
+                // wave — softer envelope on each note, second note
+                // slightly higher pitch and starting just before the
+                // first fully decays for a smoother, more lively feel.
+                const notes = [
+                    { freq: 880, start: 0,    duration: 0.18 },
+                    { freq: 1175, start: 0.12, duration: 0.22 },
+                ];
+
+                notes.forEach(({ freq, start, duration }) => {
+                    const oscillator = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    oscillator.type = "sine";
+                    oscillator.frequency.value = freq;
+
+                    const noteStart = now + start;
+                    gain.gain.setValueAtTime(0.0001, noteStart);
+                    gain.gain.exponentialRampToValueAtTime(0.2, noteStart + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + duration);
+
+                    oscillator.connect(gain);
+                    gain.connect(ctx.destination);
+                    oscillator.start(noteStart);
+                    oscillator.stop(noteStart + duration);
+                });
             } catch (e) {
                 // Still blocked (no interaction yet) — visual modal still
                 // shows regardless, so the alert isn't silently lost.
