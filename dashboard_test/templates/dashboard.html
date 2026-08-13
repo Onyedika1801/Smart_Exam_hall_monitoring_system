@@ -22,11 +22,49 @@
             margin-top: 0;
             margin-bottom: 24px;
         }
+        .glance-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin: 20px 0 28px;
+        }
+        .glance-card {
+            background: #1a1c21;
+            border-radius: 10px;
+            padding: 14px 16px;
+        }
+        .glance-label {
+            font-size: 12px;
+            color: #9a9a9a;
+            margin: 0 0 6px;
+        }
+        .glance-value {
+            font-size: 26px;
+            font-weight: 700;
+            margin: 0;
+        }
+        .glance-value.red { color: #e5484d; }
+        .glance-value.yellow { color: #e5c73d; }
+        .main-split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            align-items: stretch;
+        }
+        @media (max-width: 480px) {
+            .main-split {
+                grid-template-columns: 1fr;
+            }
+        }
+        .split-panel {
+            background: #1a1c21;
+            border-radius: 12px;
+            padding: 14px;
+            box-sizing: border-box;
+        }
         .video-container {
-            border: 1px solid #2a2d33;
             border-radius: 8px;
             overflow: hidden;
-            max-width: 720px;
             background: #000;
         }
         .video-container img {
@@ -35,22 +73,9 @@
             height: auto;
         }
         .status {
-            margin-top: 12px;
+            margin-top: 10px;
             font-size: 13px;
             color: #6bd47a;
-        }
-        .layout {
-            display: flex;
-            gap: 32px;
-            margin-top: 24px;
-        }
-        .left-col {
-            flex: 1;
-            min-width: 0;
-        }
-        .right-col {
-            width: 380px;
-            flex-shrink: 0;
         }
         h2 {
             font-size: 15px;
@@ -208,14 +233,16 @@
         #alert-log tbody tr.has-snapshot:hover {
             background: #1e2126;
         }
-        #alert-log tbody tr.has-snapshot td:first-child {
-            position: relative;
-        }
-        #alert-log tbody tr.has-snapshot td:first-child::after {
-            content: "📷";
-            font-size: 10px;
-            margin-left: 6px;
-            opacity: 0.6;
+        .snapshot-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            background: rgba(90, 160, 255, 0.18);
+            color: #7db3ff;
+            font-size: 14px;
         }
         #alert-log tbody tr.session-divider td {
             padding: 10px 8px 4px 8px;
@@ -278,30 +305,45 @@
     <h1>Exam Hall Monitor</h1>
     <p class="subtitle">Live feed + real detection pipeline (alert log, score bar, seat map)</p>
 
-    <div class="layout">
-        <div class="left-col">
+    <div class="glance-bar">
+        <div class="glance-card">
+            <p class="glance-label">Red alerts</p>
+            <p class="glance-value red" id="glance-red">0</p>
+        </div>
+        <div class="glance-card">
+            <p class="glance-label">Yellow alerts</p>
+            <p class="glance-value yellow" id="glance-yellow">0</p>
+        </div>
+        <div class="glance-card">
+            <p class="glance-label">Candidates tracked</p>
+            <p class="glance-value" id="glance-total">0</p>
+        </div>
+    </div>
+
+    <div class="main-split">
+        <div class="split-panel">
+            <h2 style="margin-top: 0;">Seat Map</h2>
+            <div id="seat-map" class="seat-map"></div>
+        </div>
+        <div class="split-panel">
+            <h2 style="margin-top: 0;">Camera Feed</h2>
             <div class="video-container">
                 <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
             </div>
             <p class="status">● Live feed active</p>
-
-            <h2>Seat Map</h2>
-            <div id="seat-map" class="seat-map"></div>
-
-            <h2>Candidate Scores</h2>
-            <div id="score-bars"></div>
-        </div>
-
-        <div class="right-col">
-            <h2>Alert Log</h2>
-            <table id="alert-log">
-                <thead>
-                    <tr><th>Time</th><th>Candidate</th><th>Behaviour</th><th>Score</th><th>Camera</th></tr>
-                </thead>
-                <tbody></tbody>
-            </table>
         </div>
     </div>
+
+    <h2>Candidate Scores</h2>
+    <div id="score-bars"></div>
+
+    <h2>Alert Log</h2>
+    <table id="alert-log">
+        <thead>
+            <tr><th>Time</th><th>Candidate</th><th>Behaviour</th><th>Score</th><th>Camera</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
 
     <div id="alert-modal" class="modal-overlay hidden">
         <div id="modal-box" class="modal-box">
@@ -359,6 +401,26 @@
             if (level === "red") return "#e5484d";
             if (level === "yellow") return "#e5c73d";
             return "#3d3f45";
+        }
+
+        // Glance bar counts are derived from each candidate's CURRENT level
+        // (the level of their most recent alert, tagged on the score fill
+        // element) — not a running total of alerts ever fired, since a
+        // candidate who alerted red once but has since calmed down
+        // shouldn't still count as "currently red". This has the same
+        // known limitation as the score bars themselves: it only updates
+        // on new alerts, so it won't reflect alert_manager's server-side
+        // score decay between alerts.
+        function updateGlanceBar() {
+            const fills = document.querySelectorAll("#score-bars .score-fill");
+            let red = 0, yellow = 0;
+            fills.forEach(f => {
+                if (f.dataset.level === "red") red++;
+                else if (f.dataset.level === "yellow") yellow++;
+            });
+            document.getElementById("glance-red").textContent = red;
+            document.getElementById("glance-yellow").textContent = yellow;
+            document.getElementById("glance-total").textContent = fills.length;
         }
 
         // A single AudioContext, created once, reused for every beep.
@@ -460,6 +522,7 @@
                 <td>${data.behaviour}</td>
                 <td>${data.score}</td>
                 <td>${data.camera_id}</td>
+                <td>${data.snapshot ? '<span class="snapshot-badge">📷</span>' : ''}</td>
             `;
             if (data.snapshot) {
                 row.classList.add("has-snapshot");
@@ -472,7 +535,9 @@
             const value = bar.querySelector(".score-value");
             fill.style.width = Math.min(data.score, 100) + "%";
             fill.style.background = levelColor(data.level);
+            fill.dataset.level = data.level;
             value.textContent = data.score;
+            updateGlanceBar();
 
             const seatId = `seat-${data.candidate_id}`;
             const seat = document.getElementById(seatId);
@@ -512,7 +577,7 @@
             const tbody = document.querySelector("#alert-log tbody");
             const divider = document.createElement("tr");
             divider.className = "session-divider";
-            divider.innerHTML = `<td colspan="5">${label}</td>`;
+            divider.innerHTML = `<td colspan="6">${label}</td>`;
             tbody.prepend(divider);
         }
 
