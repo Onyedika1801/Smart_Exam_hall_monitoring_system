@@ -32,7 +32,7 @@ import time
 import cv2
 import numpy as np
 import yaml
-from flask import Flask, Response, render_template, send_from_directory
+from flask import Flask, Response, render_template, send_from_directory, request
 
 from modules.phone_detection import PhoneDetectionModule
 from modules.gaze_detection import GazeDetectionModule
@@ -338,27 +338,50 @@ def export_csv():
     the dashboard) as a downloadable CSV file, for record-keeping or
     submission as evidence alongside the project. Read-only, same as
     every other route here -- this does not modify or delete anything
-    in the database."""
+    in the database.
+
+    A plain CSV cannot embed an actual image (CSV is a text format,
+    not a container format) -- so instead of the photo itself, each
+    row includes the snapshot's filename (matching the naming
+    convention used everywhere else in this app) AND a full URL to
+    it, so a reader can open the corresponding image directly, or a
+    script can bulk-download every referenced snapshot from the
+    snapshots/ folder. This is what actually ties a logged score back
+    to visual proof of which candidate/behaviour it was, not the CSV
+    row alone."""
     if _alert_manager is None:
         rows = []
     else:
-        # get_recent_alerts is normally used with a small limit for the
-        # dashboard's live view; a very large limit here effectively
-        # returns the whole table, without needing a separate DB method.
         rows = _alert_manager.get_recent_alerts(limit=1_000_000)
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Timestamp", "Date/Time", "Candidate", "Behaviour", "Score", "Level", "Camera"])
+    writer.writerow([
+        "Timestamp", "Date/Time", "Candidate", "Behaviour", "Score",
+        "Level", "Camera", "Snapshot Filename", "Snapshot URL",
+    ])
     for row in rows:
+        candidate_id = row["candidate_id"]
+        timestamp = row["timestamp"]
+        expected_name = snapshot_filename(candidate_id, timestamp)
+        has_snapshot = os.path.exists(os.path.join(SNAPSHOT_DIR, expected_name))
+
+        snapshot_name = expected_name if has_snapshot else ""
+        snapshot_url = (
+            request.host_url.rstrip("/") + "/snapshots/" + expected_name
+            if has_snapshot else ""
+        )
+
         writer.writerow([
-            row["timestamp"],
-            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(row["timestamp"])),
-            row["candidate_id"],
+            timestamp,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)),
+            candidate_id,
             row["behaviour_type"] or "unknown",
             row["score"],
             row["alert_level"],
             row["camera_id"] or "cam_0",
+            snapshot_name,
+            snapshot_url,
         ])
 
     csv_data = output.getvalue()
