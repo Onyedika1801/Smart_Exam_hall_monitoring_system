@@ -128,6 +128,12 @@
             text-align: right;
             color: #d0d0d0;
         }
+        .alert-log-scroll {
+            max-height: 480px;
+            overflow-y: auto;
+            border-radius: 8px;
+            background: #17191d;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -141,6 +147,10 @@
         th {
             color: #8a8a8a;
             font-weight: 500;
+            background: #17191d;
+            position: sticky;
+            top: 0;
+            z-index: 1;
         }
         .modal-overlay {
             position: fixed;
@@ -338,12 +348,14 @@
     <div id="score-bars"></div>
 
     <h2>Alert Log</h2>
-    <table id="alert-log">
-        <thead>
-            <tr><th>Time</th><th>Candidate</th><th>Behaviour</th><th>Score</th><th>Camera</th><th></th></tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+    <div class="alert-log-scroll">
+        <table id="alert-log">
+            <thead>
+                <tr><th>Time</th><th>Candidate</th><th>Behaviour</th><th>Score</th><th>Camera</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
 
     <div id="alert-modal" class="modal-overlay hidden">
         <div id="modal-box" class="modal-box">
