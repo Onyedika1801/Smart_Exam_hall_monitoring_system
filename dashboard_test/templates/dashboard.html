@@ -88,7 +88,7 @@
             display: grid;
             grid-template-columns: repeat(5, 1fr);
             gap: 6px;
-            max-width: 320px;
+            width: 92%;
         }
         .seat {
             aspect-ratio: 1;
@@ -190,12 +190,28 @@
         .modal-candidate {
             font-size: 28px;
             font-weight: 700;
-            margin-bottom: 6px;
+            margin-bottom: 14px;
         }
-        .modal-detail {
-            font-size: 14px;
-            color: #b0b0b0;
+        .modal-fields {
+            text-align: left;
             margin-bottom: 20px;
+        }
+        .modal-field-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #2a2d33;
+            font-size: 13px;
+        }
+        .modal-field-row:last-child {
+            border-bottom: none;
+        }
+        .modal-field-label {
+            color: #8a8a8a;
+        }
+        .modal-field-value {
+            color: #e6e6e6;
+            font-weight: 500;
         }
         .modal-dismiss {
             background: #e5484d;
@@ -362,7 +378,20 @@
             <div id="modal-title" class="modal-title">🔴 RED ALERT</div>
             <div class="modal-body">
                 <div id="modal-candidate" class="modal-candidate"></div>
-                <div id="modal-detail" class="modal-detail"></div>
+                <div class="modal-fields">
+                    <div class="modal-field-row">
+                        <span class="modal-field-label">Behaviour</span>
+                        <span class="modal-field-value" id="modal-behaviour"></span>
+                    </div>
+                    <div class="modal-field-row">
+                        <span class="modal-field-label">Score</span>
+                        <span class="modal-field-value" id="modal-score"></span>
+                    </div>
+                    <div class="modal-field-row">
+                        <span class="modal-field-label">Time</span>
+                        <span class="modal-field-value" id="modal-time"></span>
+                    </div>
+                </div>
             </div>
             <button id="modal-dismiss" class="modal-dismiss">Acknowledge</button>
         </div>
@@ -476,8 +505,9 @@
 
         function showRedAlertModal(data) {
             document.getElementById("modal-candidate").textContent = data.candidate_id;
-            document.getElementById("modal-detail").textContent =
-                `${data.behaviour} — score ${data.score} — ${data.timestamp}`;
+            document.getElementById("modal-behaviour").textContent = data.behaviour;
+            document.getElementById("modal-score").textContent = data.score;
+            document.getElementById("modal-time").textContent = data.timestamp;
             document.getElementById("alert-modal").classList.remove("hidden");
             playAlertBeep();
         }
@@ -494,7 +524,7 @@
             toast.className = "toast";
             toast.innerHTML = `
                 <div class="toast-title">🟡 YELLOW ALERT</div>
-                <div class="toast-body">${data.candidate_id} — ${data.behaviour} (score ${data.score})</div>
+                <div class="toast-body">${data.candidate_id} · ${data.behaviour} (score ${data.score})</div>
             `;
             container.appendChild(toast);
 
@@ -513,7 +543,7 @@
 
         function showSnapshot(data) {
             document.getElementById("snapshot-caption").textContent =
-                `${data.candidate_id} — ${data.behaviour} — score ${data.score} — ${data.timestamp}`;
+                `${data.candidate_id} · ${data.behaviour} · score ${data.score} · ${data.timestamp}`;
             document.getElementById("snapshot-img").src = `/snapshots/${data.snapshot}`;
             document.getElementById("snapshot-modal").classList.remove("hidden");
         }
@@ -525,7 +555,11 @@
         // Renders a single alert event into the log, score bar, and seat
         // map. Used for BOTH the live SSE stream and the /history replay
         // on page load, so the two never fall out of sync with each other.
-        function renderAlertEvent(data, { isLive } = { isLive: true }) {
+        // Builds and inserts the alert log table row only — no score bar,
+        // seat map, or glance bar changes. Used for EVERY historical
+        // event (all past sessions), so the log itself always shows full
+        // history regardless of which session is "current".
+        function renderLogRow(data) {
             const tbody = document.querySelector("#alert-log tbody");
             const row = document.createElement("tr");
             row.innerHTML = `
@@ -541,7 +575,16 @@
                 row.addEventListener("click", () => showSnapshot(data));
             }
             tbody.prepend(row);
+        }
 
+        // Applies an event to the score bar, seat map, and glance bar —
+        // the "current state" views. Deliberately NOT called for every
+        // historical event: only for live events, and (during history
+        // replay) only for events belonging to the MOST RECENT session,
+        // so a page refresh doesn't repaint the seat map/score bars with
+        // a mix of colors left over from unrelated earlier testing
+        // sessions. Each new session starts these views fresh/empty.
+        function applyCandidateState(data, { isLive } = { isLive: true }) {
             const bar = ensureScoreBar(data.candidate_id);
             const fill = bar.querySelector(".score-fill");
             const value = bar.querySelector(".score-value");
@@ -580,6 +623,12 @@
             }
         }
 
+        // Convenience wrapper for live SSE events: always both.
+        function renderAlertEvent(data, { isLive } = { isLive: true }) {
+            renderLogRow(data);
+            applyCandidateState(data, { isLive });
+        }
+
         // Inserts a labeled header row above whatever's currently at the
         // top of the alert log table — used to mark where one testing
         // session's alerts end and an earlier one begins, since /history
@@ -597,25 +646,35 @@
         fetch("/history")
             .then(r => r.json())
             .then(events => {
-                // Events arrive oldest-first. Render each (which prepends
-                // it, so newest ends up on top overall), and whenever a
-                // NEW session starts, close out the PREVIOUS session's
-                // block with a divider first — that divider gets prepended
-                // after all of that session's rows, landing correctly at
-                // the top of that now-complete block. The final (most
-                // recent) session's divider is flushed after the loop.
+                // Events arrive oldest-first.
+                //
+                // Pass 1: build the full alert log table (every event,
+                // every past session) with dividers between sessions —
+                // the log is meant to show real history.
                 let currentSessionLabel = null;
-                events.forEach(e => {
+                let lastSessionStartIndex = 0;
+                events.forEach((e, i) => {
                     if (e.new_session) {
                         if (currentSessionLabel !== null) {
                             insertSessionDivider(currentSessionLabel);
                         }
                         currentSessionLabel = e.session_label;
+                        lastSessionStartIndex = i;  // tracks the START of the LATEST session seen so far
                     }
-                    renderAlertEvent(e, { isLive: false });
+                    renderLogRow(e);
                 });
                 if (currentSessionLabel !== null) {
                     insertSessionDivider(currentSessionLabel);
+                }
+
+                // Pass 2: only apply score bar / seat map / glance bar
+                // state for events belonging to the MOST RECENT session
+                // (from lastSessionStartIndex onward) — this is what
+                // keeps those views showing "this session only" rather
+                // than a stale mix of colors from old, unrelated testing
+                // sessions still sitting in the alert history.
+                for (let i = lastSessionStartIndex; i < events.length; i++) {
+                    applyCandidateState(events[i], { isLive: false });
                 }
             })
             .catch(err => console.error("Failed to load alert history:", err));
