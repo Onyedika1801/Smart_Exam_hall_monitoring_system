@@ -21,6 +21,8 @@ Then open http://localhost:5000
 """
 
 import argparse
+import csv
+import io
 import json
 import os
 import queue
@@ -328,6 +330,44 @@ def history():
 @app.route("/snapshots/<path:filename>")
 def snapshot(filename):
     return send_from_directory(SNAPSHOT_DIR, filename)
+
+
+@app.route("/export/csv")
+def export_csv():
+    """Exports the full alert history (not just the last 50 shown in
+    the dashboard) as a downloadable CSV file, for record-keeping or
+    submission as evidence alongside the project. Read-only, same as
+    every other route here -- this does not modify or delete anything
+    in the database."""
+    if _alert_manager is None:
+        rows = []
+    else:
+        # get_recent_alerts is normally used with a small limit for the
+        # dashboard's live view; a very large limit here effectively
+        # returns the whole table, without needing a separate DB method.
+        rows = _alert_manager.get_recent_alerts(limit=1_000_000)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Timestamp", "Date/Time", "Candidate", "Behaviour", "Score", "Level", "Camera"])
+    for row in rows:
+        writer.writerow([
+            row["timestamp"],
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(row["timestamp"])),
+            row["candidate_id"],
+            row["behaviour_type"] or "unknown",
+            row["score"],
+            row["alert_level"],
+            row["camera_id"] or "cam_0",
+        ])
+
+    csv_data = output.getvalue()
+    filename = f"exam_alert_log_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        csv_data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.route("/video_feed")
