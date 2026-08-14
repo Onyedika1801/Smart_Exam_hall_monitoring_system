@@ -10,9 +10,6 @@
             font-family: -apple-system, Segoe UI, Roboto, sans-serif;
             margin: 0;
             padding: 24px;
-            max-width: 90vw;
-            margin-left: auto;
-            margin-right: auto;
         }
         h1 {
             font-size: 20px;
@@ -53,7 +50,8 @@
             grid-template-columns: 1fr 1fr;
             gap: 16px;
             align-items: stretch;
-            max-height: 45vh;
+        }
+        @media (max-width: 480px) {
             .main-split {
                 grid-template-columns: 1fr;
             }
@@ -292,6 +290,24 @@
             padding: 20px;
             max-width: min(90vw, 640px);
             text-align: center;
+            position: relative;
+        }
+        .snapshot-close-x {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #9a9a9a;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .snapshot-close-x:hover {
+            background: #2a2d33;
+            color: #e6e6e6;
         }
         .snapshot-caption {
             font-size: 13px;
@@ -460,12 +476,10 @@
 
     <div id="snapshot-modal" class="modal-overlay hidden">
         <div class="snapshot-box">
+            <button id="snapshot-close-x" class="snapshot-close-x" title="Close" aria-label="Close">✕</button>
             <div id="snapshot-caption" class="snapshot-caption"></div>
             <img id="snapshot-img" class="snapshot-img" src="" alt="Detection snapshot">
-            <div style="display: flex; gap: 10px; justify-content: center;">
-                <a id="snapshot-download" class="modal-dismiss" href="" download style="background:#2c3036; text-decoration:none; display:inline-block;">⬇ Download</a>
-                <button id="snapshot-dismiss" class="modal-dismiss">Close</button>
-            </div>
+            <a id="snapshot-download" class="modal-dismiss" href="" download style="text-decoration:none; display:inline-block;">⬇ Download</a>
         </div>
     </div>
 
@@ -632,7 +646,7 @@
             document.getElementById("snapshot-modal").classList.remove("hidden");
         }
 
-        document.getElementById("snapshot-dismiss").addEventListener("click", () => {
+        document.getElementById("snapshot-close-x").addEventListener("click", () => {
             document.getElementById("snapshot-modal").classList.add("hidden");
         });
 
@@ -680,23 +694,21 @@
         function renderLogRow(data) {
             const tbody = document.querySelector("#alert-log tbody");
             const row = document.createElement("tr");
-            const badge = data.snapshot
-                ? `<a href="/snapshots/${data.snapshot}" download="${data.snapshot}" class="snapshot-badge" title="Download this snapshot" onclick="event.stopPropagation()">📷</a>`
-                : "";
             row.innerHTML = `
                 <td>${data.timestamp}</td>
                 <td>${data.candidate_id}</td>
                 <td>${data.behaviour}</td>
                 <td>${data.score}</td>
                 <td>${data.camera_id}</td>
-                <td>${badge}</td>
+                <td>${data.snapshot ? '<span class="snapshot-badge">📷</span>' : ''}</td>
             `;
             if (data.snapshot) {
                 row.classList.add("has-snapshot");
-                // Clicking anywhere on the row (except the badge itself,
-                // stopped above) opens the full preview. Clicking the
-                // badge directly downloads that one event's snapshot
-                // immediately, without needing to open the preview first.
+                // Clicking the row opens the preview -- the actual
+                // download button lives inside that preview (below the
+                // image), so the person sees the photo before choosing
+                // to download it, rather than a click silently
+                // triggering a file save.
                 row.addEventListener("click", () => showSnapshot(data));
             }
             tbody.prepend(row);
