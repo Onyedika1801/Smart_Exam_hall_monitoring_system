@@ -19,13 +19,17 @@ Responsibilities:
 Architecture note (Section 3.13):
   Camera thread → [gaze_frame_queue] → GazeDetectionModule → [alert_queue]
 
-Head orientation thresholds (Chapter 3 Table 3.3):
-  Yaw:   outside ±30°  → looking at neighbour (always active)
-  Pitch: below personal baseline - 15°  → reading hidden notes
-         (personal baseline calibrated over first 180s per candidate;
-          "down" is NOT flagged at all during calibration — normal
-          question-reading/writing posture would otherwise false-positive)
-  Pitch: above +15°   → signalling / looking back (always active)
+Head orientation thresholds (Chapter 3 Table 3.3, revised post-deployment):
+  Yaw:   outside ±30°  → looking at neighbour (the only gaze deviation
+                          checked)
+  Pitch: detection REMOVED. Real exam-hall use showed both directions
+         produced alerts on normal behaviour rather than genuine
+         suspicion: heads naturally tilt down for most of an exam
+         while writing, and looking up at a ceiling has no plausible
+         cheating use case. Pitch is still ESTIMATED (and shown in
+         draw_detections()'s debug display) but no longer used to
+         flag anything -- see _classify_deviation() for the removal
+         rationale and what was left in place vs. torn out.
   Roll:  monitored only, does NOT trigger alert independently
 """
 
@@ -579,28 +583,33 @@ class GazeDetectionModule:
         Check if head orientation is outside normal range.
         Returns deviation type string or None if normal.
 
-        Chapter 3 Table 3.3 (updated after false-positive testing):
-          Yaw outside ±30°  → "lateral"   — always active, incl. calibration
-          Pitch above +15°  → "up"        — always active, incl. calibration
-          Pitch down        → "down"      — ONLY checked once this candidate's
-                               personal baseline is calibrated. During the
-                               calibration window, downward pitch is never
-                               flagged — that's the whole point of learning
-                               each candidate's natural writing angle first.
+        Pitch (up/down) detection was REMOVED after real exam-hall use
+        showed it wasn't distinguishing genuine suspicious behaviour
+        from ordinary writing posture: heads naturally tilt down for
+        most of an exam while writing, and looking up at a ceiling has
+        no plausible use for cheating in the first place -- so both
+        directions were producing alerts on normal behaviour without
+        adding real detection value. Only yaw (looking sideways at a
+        neighbour) remains, which is the behaviour this module can
+        actually distinguish reliably from normal exam conduct.
+
+        Chapter 3 Table 3.3 (updated a second time, post-deployment):
+          Yaw outside ±30° → "lateral" — the only gaze deviation
+                              checked now.
+          Pitch (up/down)  → REMOVED, see above. The pitch estimation
+                              itself (PoseEstimator.estimate) and the
+                              personalised calibration machinery
+                              (CandidateGazeState.baseline_pitch etc.)
+                              are left in place, unused for flagging,
+                              rather than torn out -- this keeps the
+                              change small and reversible, and pitch
+                              is still computed/logged for
+                              draw_detections()'s on-screen debug
+                              display.
           Roll not checked here (monitored but doesn't trigger)
         """
         if abs(yaw) > self._yaw_threshold:
             return "lateral"
-        if pitch > self._pitch_up:
-            return "up"
-
-        # Downward pitch — personalised, and exempt during calibration
-        if state.baseline_pitch is not None:
-            effective_pitch_down = state.baseline_pitch - self._pitch_down_margin
-            if pitch < effective_pitch_down:
-                return "down"
-        # else: still calibrating — intentionally not checking "down" at all
-
         return None
 
     def _get_behaviour_type(self, deviation_type: str) -> str:
