@@ -64,6 +64,7 @@
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
         .video-container {
             border-radius: 8px;
@@ -124,13 +125,17 @@
         .seat-map {
             display: grid;
             grid-template-columns: repeat(5, 1fr);
+            grid-template-rows: repeat(4, 1fr);
             gap: 6px;
-            width: 82%;
+            flex: 1 1 auto;
+            min-height: 0;
+            aspect-ratio: 5 / 4;
+            max-width: 100%;
+            margin: 0 auto;
         }
         .seat {
-            aspect-ratio: 1;
-            background: #2a2d33;
             border-radius: 4px;
+            background: #2a2d33;
             transition: background 0.3s ease;
         }
         .seat.flash {
