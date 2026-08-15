@@ -26,6 +26,7 @@ import io
 import json
 import os
 import queue
+import signal
 import threading
 import time
 
@@ -440,6 +441,37 @@ if __name__ == "__main__":
         target=pipeline_loop, args=(args.source, config), daemon=True
     )
     pipeline_thread.start()
+
+    def _force_exit_after_delay(delay_seconds=2.0):
+        """Safety net for Ctrl+C: if a clean shutdown hasn't actually
+        ended the process within this window, force-kill it outright.
+        This exists because relying purely on every generator loop
+        (video_feed, /alerts SSE) cooperatively checking a _running
+        flag turned out not to reliably return terminal control on
+        Windows when a browser tab was still open at Ctrl+C time --
+        likely Werkzeug's threaded dev server not unblocking an
+        in-flight streaming connection's handler thread promptly
+        enough. Rather than keep chasing that indefinitely, this
+        guarantees Ctrl+C works every time, at the cost of skipping
+        the graceful module.stop() calls if the timeout is actually
+        hit (acceptable for a local dev/test tool, not a production
+        service)."""
+        time.sleep(delay_seconds)
+        print("[INFO] Graceful shutdown timed out -- forcing exit.")
+        os._exit(0)
+
+    def handle_sigint(signum, frame):
+        global _running
+        print("\n[INFO] Ctrl+C received -- shutting down...")
+        _running = False
+        # Starts the force-exit countdown immediately; if the normal
+        # app.run() -> finally block below completes first (the
+        # graceful path), the process exits on its own before this
+        # timer ever fires, and this thread being a daemon means it
+        # doesn't block that from happening.
+        threading.Thread(target=_force_exit_after_delay, daemon=True).start()
+
+    signal.signal(signal.SIGINT, handle_sigint)
 
     try:
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
