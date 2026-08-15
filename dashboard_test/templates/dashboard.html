@@ -50,11 +50,13 @@
             grid-template-columns: 0.85fr 1fr;
             gap: 16px;
             align-items: stretch;
-            max-height: 58vh;
+            height: 58vh;
+            overflow: hidden;
         }
         @media (max-width: 480px) {
             .main-split {
                 grid-template-columns: 1fr;
+                height: auto;
             }
         }
         .split-panel {
