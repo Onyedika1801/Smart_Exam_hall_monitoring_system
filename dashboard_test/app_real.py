@@ -51,6 +51,17 @@ _sse_clients = []
 _sse_clients_lock = threading.Lock()
 _alert_manager = None
 
+# The ACTUAL moment this process started -- distinct from the
+# alert-timestamp-gap heuristic used for the log's visual session
+# dividers. This is what determines whether the seat map/score
+# bars/glance bar treat a historical alert as belonging to "now":
+# an old alert row can be within the 15-minute gap window (so the
+# log's divider logic still groups it with "the current session" for
+# display purposes) while genuinely predating a brand new restart of
+# this process -- in which case it must NOT repaint the seat map,
+# even though the log is still allowed to show it as recent history.
+PIPELINE_START_TIME = time.time()
+
 # Snapshots are saved next to this file, named "{candidate_id}_{timestamp}.jpg".
 # This filename convention (rather than a DB column) means /history can
 # reconstruct the expected filename from data alert_manager already logs
@@ -271,14 +282,25 @@ def history():
     instead of starting empty. Uses the same AlertManager instance the
     live pipeline is already writing to.
 
-    Also tags each event with a session boundary marker: if the gap
-    since the PREVIOUS alert (chronologically) exceeds SESSION_GAP_SECONDS,
-    this event is flagged as the start of a new session. This is a
-    heuristic inferred from timestamp gaps, not a real session ID -- no
-    DB schema change needed, and it works retroactively on alerts
-    logged before this feature existed. A restart of app_real.py with
-    no real gap in time (e.g. quick Ctrl+C and re-run within a minute)
-    will NOT be treated as a new session; only an actual time gap is."""
+    Each event carries TWO separate, unrelated flags:
+
+    1. new_session / session_label -- a DISPLAY-ONLY heuristic based on
+       gaps between alert timestamps (>15 min = new session), used only
+       for the log's visual dividers. Purely cosmetic.
+
+    2. is_current_process -- a PRECISE flag based on this process's
+       actual start time (PIPELINE_START_TIME). This is what the
+       front-end uses to decide whether to repaint the seat map/score
+       bars/glance bar for that candidate.
+
+    These two are deliberately independent: a quick restart (Ctrl+C,
+    then re-run within a few minutes) can still show the log's dividers
+    grouping old and new alerts together as "one session" by the gap
+    heuristic, while is_current_process correctly stays False for
+    every alert from before this exact process started -- fixing a
+    real bug where a candidate's seat stayed red on a fresh restart
+    just because the previous run's last alert wasn't yet >15 minutes
+    old."""
     if _alert_manager is None:
         return json.dumps([]), 200, {"Content-Type": "application/json"}
 
@@ -323,6 +345,16 @@ def history():
             "snapshot": expected_name if has_snapshot else None,
             "new_session": is_new_session,
             "session_label": time.strftime("%b %d, %Y — session from %H:%M", time.localtime(timestamp)),
+            # Precise flag, separate from the display-only gap heuristic
+            # above: does this alert actually belong to the CURRENTLY
+            # RUNNING process? Only events timestamped at/after this
+            # process's own start time paint the seat map/score
+            # bars/glance bar. An old alert can still be shown in the
+            # log (possibly even grouped under "current session" by the
+            # gap heuristic, if the restart happened quickly) without
+            # ever repainting live state for a candidate that isn't
+            # actually being tracked by this run.
+            "is_current_process": timestamp >= PIPELINE_START_TIME,
         })
 
     return json.dumps(events), 200, {"Content-Type": "application/json"}

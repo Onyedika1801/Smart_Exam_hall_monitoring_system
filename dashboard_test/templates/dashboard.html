@@ -795,16 +795,15 @@
                 //
                 // Pass 1: build the full alert log table (every event,
                 // every past session) with dividers between sessions —
-                // the log is meant to show real history.
+                // the log is meant to show real history. Dividers use
+                // the display-only gap heuristic (new_session).
                 let currentSessionLabel = null;
-                let lastSessionStartIndex = 0;
-                events.forEach((e, i) => {
+                events.forEach(e => {
                     if (e.new_session) {
                         if (currentSessionLabel !== null) {
                             insertSessionDivider(currentSessionLabel);
                         }
                         currentSessionLabel = e.session_label;
-                        lastSessionStartIndex = i;  // tracks the START of the LATEST session seen so far
                     }
                     renderLogRow(e);
                 });
@@ -813,14 +812,18 @@
                 }
 
                 // Pass 2: only apply score bar / seat map / glance bar
-                // state for events belonging to the MOST RECENT session
-                // (from lastSessionStartIndex onward) — this is what
-                // keeps those views showing "this session only" rather
-                // than a stale mix of colors from old, unrelated testing
-                // sessions still sitting in the alert history.
-                for (let i = lastSessionStartIndex; i < events.length; i++) {
-                    applyCandidateState(events[i], { isLive: false });
-                }
+                // state for events the backend confirms actually belong
+                // to THIS running process (is_current_process), based on
+                // its real start time — not the gap heuristic used for
+                // the log's dividers above. Using the gap heuristic here
+                // was the bug: a quick restart within 15 minutes of the
+                // previous run's last alert still looked like "one
+                // continuous session" by timestamp gaps alone, so a
+                // candidate's seat could stay red on a brand new run
+                // that had logged zero alerts of its own yet.
+                events
+                    .filter(e => e.is_current_process)
+                    .forEach(e => applyCandidateState(e, { isLive: false }));
             })
             .catch(err => console.error("Failed to load alert history:", err));
 
