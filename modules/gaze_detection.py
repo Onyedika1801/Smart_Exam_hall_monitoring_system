@@ -525,7 +525,7 @@ class GazeDetectionModule:
                 duration = state.get_deviation_duration()
 
                 # Only raise event after persistence threshold (3 seconds)
-                # OR immediately for very large deviations
+
                 should_alert = (
                     duration >= self._persistence_secs and state.can_alert()
                 )

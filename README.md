@@ -18,7 +18,7 @@ No facial recognition is used anywhere in this system, by design — candidate i
 ## What each module detects
 
 - **Phone Detection** — fires immediately on a single qualifying frame (no waiting period), since phone possession is treated as unambiguous. Confidence-weighted scoring per Chapter 3 Table 3.7.
-- **Gaze/Head Detection** — flags sideways looking and looking up always; looking down is personalised per candidate via a calibration window, so normal question-reading isn't mistaken for reading hidden notes.
+- **Gaze/Head Detection** — flags sideways looking (yaw beyond ±30°) only. Pitch (up/down head tilt) was tested and removed from scoring after real exam-hall use showed it couldn't distinguish genuine suspicious behaviour from ordinary writing posture — heads naturally tilt down while writing, and looking up has no plausible use for cheating. The pitch estimator and calibration machinery remain in the code for the on-screen debug display, but no longer trigger alerts.
 - **Posture Analysis** — personalised baseline per candidate (mean + 2×std of their own natural posture), rather than a one-size-fits-all threshold.
 - **Object Passing** — tracks hand movement between grid zones via MediaPipe Hands, combined with YOLO object detection to check if the hand is holding something. Includes a grace window and burst-detection suppression so mass attendance-sheet distribution at the start of an exam isn't flagged as cheating.
 
