@@ -11,7 +11,7 @@ gaze angle, a posture deviation, or a hand crossing — those are
 already covered by their own isolation tests.
 
 Usage:
-    python test_alert_manager.py
+    python -m tests.test_alert_manager
 
 Each test prints PASS/FAIL. A summary is printed at the end.
 """
@@ -23,7 +23,7 @@ import sqlite3
 import yaml
 
 from modules.phone_detection import DetectionEvent
-from alert_manager import AlertManager
+from app.alert_manager import AlertManager
 
 
 def load_config(config_path: str = "config.yaml") -> dict:

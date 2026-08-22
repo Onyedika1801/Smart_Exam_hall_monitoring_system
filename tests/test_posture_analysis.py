@@ -5,8 +5,8 @@ Isolation test for the Posture Analysis Module.
 Completely independent of all other modules.
 
 Usage:
-    python test_posture_analysis.py --source 0
-    python test_posture_analysis.py --source test_videos/test.mp4
+    python -m tests.test_posture_analysis --source 0
+    python -m tests.test_posture_analysis --source test_videos/test.mp4
 
 What to test:
     PHASE 1 — Calibration (first 60 seconds):

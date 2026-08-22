@@ -5,8 +5,8 @@ Isolation test for the Phone Detection Module.
 Run this BEFORE integrating into the main pipeline.
 
 Usage:
-    python test_phone_detection.py --source 0         # webcam
-    python test_phone_detection.py --source test_videos/test.mp4
+    python -m tests.test_phone_detection --source 0         # webcam
+    python -m tests.test_phone_detection --source test_videos/test.mp4
 
 IMPORTANT NOTE ON FPS:
     The full pipeline camera runs at 30 FPS but the detection module

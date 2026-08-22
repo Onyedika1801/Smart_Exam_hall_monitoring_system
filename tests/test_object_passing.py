@@ -5,8 +5,8 @@ Isolation test for the Object Passing Detection Module.
 Run this BEFORE integrating into the main pipeline.
 
 Usage:
-    python test_object_passing.py --source 0
-    python test_object_passing.py --source test_videos/test.mp4
+    python -m tests.test_object_passing --source 0
+    python -m tests.test_object_passing --source test_videos/test.mp4
 
 IMPORTANT — READ BEFORE TESTING:
     This module has real, documented limitations (see the docstring at

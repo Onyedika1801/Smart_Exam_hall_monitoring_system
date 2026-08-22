@@ -13,9 +13,9 @@ it reuses them as-is. The one real change made to alert_manager.py
 because the dashboard's alert log needs to show what triggered each
 alert, and the previous on_alert payload didn't carry that.
 
-Run:
-    python app_real.py --source 0
-    python app_real.py --source 1
+Run (from repo root):
+    python -m app.dashboard.app_real --source 0
+    python -m app.dashboard.app_real --source 1
 
 Then open http://localhost:5000
 """
@@ -39,7 +39,7 @@ from modules.phone_detection import PhoneDetectionModule
 from modules.gaze_detection import GazeDetectionModule
 from modules.posture_analysis import PostureAnalysisModule
 from modules.object_passing import ObjectPassingModule
-from alert_manager import AlertManager
+from app.alert_manager import AlertManager
 
 app = Flask(__name__)
 

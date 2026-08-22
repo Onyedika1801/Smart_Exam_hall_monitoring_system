@@ -5,8 +5,8 @@ Isolation test for the Gaze Detection Module.
 Completely independent of phone_detection.py.
 
 Usage:
-    python test_gaze_detection.py --source 0
-    python test_gaze_detection.py --source test_videos/test.mp4
+    python -m tests.test_gaze_detection --source 0
+    python -m tests.test_gaze_detection --source test_videos/test.mp4
 
 What to test:
     1. Sit normally → should show GREEN box, no alerts

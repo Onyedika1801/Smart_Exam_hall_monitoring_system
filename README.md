@@ -28,7 +28,7 @@ No facial recognition is used anywhere in this system, by design — candidate i
 
 ## Dashboard
 
-`dashboard_test/app_real.py` runs the full four-module pipeline plus the real `AlertManager`, and serves a live web dashboard:
+`app/dashboard/app_real.py` runs the full four-module pipeline plus the real `AlertManager`, and serves a live web dashboard:
 
 - Live MJPEG video feed (with a full-screen toggle — alerts stay visible and audible even in full screen)
 - A seat map that highlights flagged candidates by grid position, never showing coordinates to the invigilator directly
@@ -44,30 +44,34 @@ No facial recognition is used anywhere in this system, by design — candidate i
 
 ```
 Smart_Exam_hall_monitoring_system/
+├── app/
+│   ├── main.py                # Integrated run, terminal status window (no dashboard)
+│   ├── alert_manager.py
+│   └── dashboard/
+│       ├── app_real.py        # Full pipeline + live dashboard (real detection)
+│       ├── app_prototype.py   # Earlier fake-data SSE test version
+│       ├── snapshots/         # Captured detection snapshots (generated at runtime)
+│       └── templates/
+│           └── dashboard.html
 ├── modules/
 │   ├── __init__.py
 │   ├── phone_detection.py
 │   ├── gaze_detection.py
 │   ├── posture_analysis.py
 │   └── object_passing.py
-├── dashboard_test/
-│   ├── app_real.py          # Full pipeline + live dashboard (real detection)
-│   ├── app.py                # Earlier fake-data SSE test version
-│   ├── snapshots/            # Captured detection snapshots (generated at runtime)
-│   └── templates/
-│       └── dashboard.html
 ├── models/
 │   └── phone_detector_best.pt
-├── database/                 # SQLite alert/incident database
+├── database/                  # SQLite alert/incident database
 ├── test_videos/
-├── alert_manager.py
-├── main.py                   # Integrated run with a basic terminal status window (no dashboard)
+├── tests/
+│   ├── test_phone_detection.py
+│   ├── test_gaze_detection.py
+│   ├── test_posture_analysis.py
+│   ├── test_object_passing.py
+│   └── test_alert_manager.py
 ├── config.yaml
-├── test_phone_detection.py
-├── test_gaze_detection.py
-├── test_posture_analysis.py
-├── test_object_passing.py
-└── test_alert_manager.py
+├── requirements.txt
+└── README.md
 ```
 
 ## Setup
@@ -83,24 +87,25 @@ pip install -r requirements.txt
 
 ## Testing each module in isolation
 
+Run from the project root (module-mode, so `config.yaml` resolves correctly):
 ```bash
-python test_phone_detection.py --source 0
-python test_gaze_detection.py --source 0
-python test_posture_analysis.py --source 0
-python test_object_passing.py --source 0
-python test_alert_manager.py
+python -m tests.test_phone_detection --source 0
+python -m tests.test_gaze_detection --source 0
+python -m tests.test_posture_analysis --source 0
+python -m tests.test_object_passing --source 0
+python -m tests.test_alert_manager
 ```
 
 ## Running the full system
 
 Terminal-only, no dashboard (lightweight status window):
 ```bash
-python main.py --source 0
+python -m app.main --source 0
 ```
 
 Full live dashboard (run from the project root):
 ```bash
-python -m dashboard_test.app_real --source 0
+python -m app.dashboard.app_real --source 0
 ```
 Then open `http://localhost:5000` in a browser.
 

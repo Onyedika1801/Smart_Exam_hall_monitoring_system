@@ -70,7 +70,7 @@ from modules.phone_detection import PhoneDetectionModule, DetectionEvent
 from modules.gaze_detection import GazeDetectionModule
 from modules.posture_analysis import PostureAnalysisModule
 from modules.object_passing import ObjectPassingModule
-from alert_manager import AlertManager
+from app.alert_manager import AlertManager
 
 logging.basicConfig(
     level=logging.INFO,
