@@ -1,0 +1,19 @@
+# Smart Exam Hall Monitoring System
+# Requires Python 3.11 (MediaPipe is incompatible with newer Python versions
+# at the time this project was built — see README).
+#
+# Install with:
+#   pip install -r requirements.txt
+#
+# This project runs CPU-only (see Chapter 1 / README — no GPU was available
+# during development, confirmed through direct measurement). If pip installs
+# a CUDA build of torch on your machine, use the CPU-only wheel instead:
+#   pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+
+mediapipe==0.10.9
+ultralytics==8.3.0
+torch==2.4.1
+opencv-python==4.10.0.84
+numpy==1.26.4
+Flask==3.0.3
+PyYAML==6.0.2

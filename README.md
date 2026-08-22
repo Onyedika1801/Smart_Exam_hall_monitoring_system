@@ -77,8 +77,9 @@ Requires Python 3.11 (MediaPipe is incompatible with newer versions).
 ```bash
 py -3.11 -m venv venv
 venv\Scripts\activate
-pip install mediapipe ultralytics opencv-python pyyaml flask
+pip install -r requirements.txt
 ```
+
 
 ## Testing each module in isolation
 
