@@ -178,7 +178,7 @@ class ObjectPassingModule:
         # --- Generic object detector (supplements the phone-only
         # fine-tuned model — see config.yaml comment for why this exists) ---
         self._use_generic_detector = cfg.get('use_generic_object_detector', False)
-        self._generic_model_path = cfg.get('generic_model_path', 'yolov8n.pt')
+        self._generic_model_path = cfg.get('generic_model_path', 'models/yolov8n.pt')
         self._generic_object_conf = cfg.get('generic_object_confidence_threshold', 0.35)
         self._generic_object_classes = set(cfg.get('generic_object_classes', []))
         self._generic_model = None  # loaded in _load_models() if enabled

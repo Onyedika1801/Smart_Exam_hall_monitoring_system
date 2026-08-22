@@ -60,7 +60,8 @@ Smart_Exam_hall_monitoring_system/
 │   ├── posture_analysis.py
 │   └── object_passing.py
 ├── models/
-│   └── phone_detector_best.pt
+│   ├── phone_detector_best.pt  # Fine-tuned phone detector (Chapter 3)
+│   └── yolov8n.pt              # Stock COCO model, generic object fallback (Section 3.9)
 ├── database/                  # SQLite alert/incident database
 ├── test_videos/
 ├── tests/

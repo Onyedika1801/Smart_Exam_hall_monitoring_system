@@ -137,7 +137,7 @@ object_passing:
   # weights (auto-downloaded by ultralytics on first run if not cached
   # locally) -- NOT the fine-tuned phone weights.
   use_generic_object_detector: true
-  generic_model_path: "yolov8n.pt"
+  generic_model_path: "models/yolov8n.pt"
   generic_object_confidence_threshold: 0.33  # Raised from 0.3: debug-log
                                                # evidence (empty-hand test
                                                # session) showed 'knife' and
